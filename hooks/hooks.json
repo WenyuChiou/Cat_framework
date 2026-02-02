@@ -1,0 +1,9 @@
+{
+  "hooks": [
+    {
+      "event": "UserPromptSubmit",
+      "command": "node",
+      "args": ["hooks/run_ai_patch.js"]
+    }
+  ]
+}

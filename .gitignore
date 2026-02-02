@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated outputs (re-created by running main.py)
+output/*.png
+output/*.csv
+
+# Data files (large, downloaded via --download)
+data/grid.xml
+data/stationlist.json
+data/CA24.txt
+
+# Windows
+desktop.ini
+Thumbs.db
+
+# Reference materials (large PDFs / lecture slides)
+ref/
+
+# Claude Code local settings
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+nul
