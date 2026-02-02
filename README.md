@@ -369,17 +369,104 @@ All plots are saved to `output/` and can be regenerated at any time.
 
 ---
 
-## Data Sources
+## Data Sources & Integration
 
-| Dataset | Source | File | Size |
-|---------|--------|------|------|
-| ShakeMap grid | USGS (event ci3144585) | `data/grid.xml` | ~3.4 MB |
-| Station recordings | USGS (event ci3144585) | `data/stationlist.json` | ~3.4 MB |
-| Bridge inventory | FHWA NBI 2024 (California) | `data/CA24.txt` | ~25 MB |
+### Overview
 
-Download automatically: `python main.py --download`
+本框架使用兩種外部資料來源，皆為**下載到本地後離線讀取**，不呼叫任何線上 API：
 
-The data analysis mode (`python main.py` without flags) uses a KD-tree to assign ShakeMap Sa(1.0s) values to each NBI bridge location, then computes Hazus damage probabilities per bridge.
+| 資料 | 來源機構 | 下載 URL | 本地路徑 | 格式 | 大小 |
+|------|---------|---------|---------|------|------|
+| ShakeMap 地震動格點 | **USGS** Earthquake Hazards Program | earthquake.usgs.gov/product/shakemap/ci3144585/.../grid.xml | `data/grid.xml` | XML (grid_field + grid_data) | ~3.4 MB |
+| ShakeMap 測站記錄 | **USGS** Earthquake Hazards Program | earthquake.usgs.gov/product/shakemap/ci3144585/.../stationlist.json | `data/stationlist.json` | GeoJSON | ~3.4 MB |
+| 橋梁清冊 | **FHWA** National Bridge Inventory (NBI) | www.fhwa.dot.gov/bridge/nbi/2024/delimited/CA24.txt | `data/CA24.txt` | Comma-delimited text | ~25 MB |
+
+### Step 1: 下載資料
+
+```bash
+python main.py --download
+```
+
+這會透過 `src/data_loader.py` 中的 `download_shakemap()`、`download_shakemap_stations()`、`download_nbi()` 函數，從 USGS 和 FHWA 官網下載三個檔案到 `data/` 目錄。你也可以手動下載或從其他來源取得同格式的檔案，放到 `data/` 即可。
+
+### Step 2: 框架如何讀取資料
+
+下載完成後，`src/data_loader.py` 提供以下解析函數：
+
+**ShakeMap (USGS 地震動資料):**
+
+```python
+from src.data_loader import load_shakemap, load_stations
+
+# 讀取 grid.xml → DataFrame，欄位: LON, LAT, PGA, PGV, PSA03, PSA10, PSA30
+# PGA 和 PSA 欄位自動從 %g 轉換為 g
+shakemap = load_shakemap("data/grid.xml")
+
+# 讀取 stationlist.json → DataFrame，欄位: station_code, lat, lon, pga, psa10, ...
+stations = load_stations("data/stationlist.json")
+```
+
+- `grid.xml` 包含 ~10,000 個格點的 PGA、Sa(0.3s)、Sa(1.0s)、Sa(3.0s) 等地震動參數
+- 原始數值單位為 %g，解析器自動除以 100 轉為 g
+- 事件 metadata（震級、震央座標）從 XML root attributes 提取
+
+**NBI (FHWA 橋梁清冊):**
+
+```python
+from src.data_loader import load_nbi, classify_nbi_to_hazus
+
+# 讀取 NBI 分隔文字檔 → DataFrame
+# 自動偵測欄位名稱（pattern matching）、轉換座標格式（DDMMSS.SS → 十進位）
+# 以 bounding box 篩選 Northridge 地區 (33.7-34.8°N, 117.5-119.0°W)
+nbi = load_nbi("data/CA24.txt")
+
+# 根據材料代碼、跨數、建造年份分類為 Hazus HWB 橋梁類別
+nbi = classify_nbi_to_hazus(nbi)
+```
+
+- NBI 欄位映射：material_code → 材料類型、num_spans → 跨型、year_built ≥ 1975 → 耐震設計
+- 座標格式自動判斷：大於 200 視為 DDMMSS.SS 格式，否則視為十進位度數
+
+### Step 3: 資料分析流程
+
+```bash
+python main.py          # 預設模式：讀取本地資料 → 完整分析
+```
+
+預設模式的處理流程：
+
+1. **讀取 ShakeMap** → 取得格點上的 Sa(1.0s) 空間分布
+2. **讀取 NBI** → 取得 Northridge 地區 ~1,600 座橋梁的位置與屬性
+3. **HWB 分類** → 每座橋依結構屬性指派 Hazus 橋梁類別
+4. **空間匹配** → 用 KD-tree 最近鄰搜尋，將 ShakeMap Sa(1.0s) 指派到每座橋的位置
+5. **損壞機率** → 對每座橋計算 5 個損壞狀態的機率（none/slight/moderate/extensive/complete）
+6. **輸出** → 結果存為 `output/bridge_damage_results.csv`
+
+### 兩種分析模式的資料來源差異
+
+| 模式 | 地震動來源 | 橋梁來源 | 說明 |
+|------|-----------|---------|------|
+| `python main.py` (預設) | **USGS ShakeMap** 實測/模型資料 | **FHWA NBI** 真實橋梁清冊 | 使用歷史地震的實際地震動 |
+| `--pipeline` | **BA08 GMPE** 自行計算 | 合成組合 (或 NBI) | 可對任意地震情境預測 |
+| `--probabilistic` | **BA08 GMPE** 自行計算 | 合成組合 (或 NBI) | 隨機地震目錄 + GMPE |
+| `--fragility-only` | 不需要 | 不需要 | 純理論脆弱度曲線 |
+
+### 使用自己的資料
+
+你可以替換 `data/` 中的檔案來分析不同地震或不同地區的橋梁：
+
+```python
+# 使用不同州的 NBI 資料
+nbi = load_nbi("data/TX24.txt", northridge_bbox={
+    "lat_min": 29.0, "lat_max": 31.0,
+    "lon_min": -98.0, "lon_max": -96.0,
+})
+
+# 使用不同地震的 ShakeMap
+shakemap = load_shakemap("data/other_event_grid.xml")
+```
+
+只要檔案格式與 USGS ShakeMap XML / FHWA NBI delimited text 相同，框架即可讀取。
 
 ---
 
