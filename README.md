@@ -86,15 +86,11 @@ python main.py --probabilistic
 # 3. Fragility curves only (no hazard/loss, existing analysis)
 python main.py --fragility-only
 
-# 4. Download USGS ShakeMap + FHWA NBI data, then run full data analysis
-python main.py --download
-python main.py
-
-# 5. Download only (no analysis)
-python main.py --download-only
-
-# 6. Download + process via pipeline (clean/curated outputs)
+# 4. Download + process via pipeline (clean/curated outputs)
 python main.py --download-pipeline
+
+# 5. Run full data analysis after download
+python main.py
 ```
 
 
@@ -110,10 +106,7 @@ python broker/utils/nbi_ingest.py --download
 # C) Run the main analysis after data is ready
 python main.py
 
-# C2) Download only via main.py (no analysis)
-python main.py --download-only
-
-# C3) Download + process via main.py (pipeline)
+# C2) Download + process via main.py (pipeline)
 python main.py --download-pipeline
 
 # D) Deterministic or probabilistic modes
@@ -429,7 +422,7 @@ This project integrates two data sources:
 ### Recommended download method (reproducible)
 
 ```bash
-python broker/utils/nbi_ingest.py --download
+python main.py --download-pipeline
 ```
 
 ### Load and analyze (after download)
@@ -468,7 +461,7 @@ ls data/hazard/usgs/shakemap/logs
 
 ### Common issues
 
-- `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python broker/utils/nbi_ingest.py --download` later, or update the resolver in `broker/utils/nbi_ingest.py`.
+- `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python main.py --download-pipeline` later, or update the resolver in `broker/utils/nbi_ingest.py`.
 - Many `ParserWarning` lines: NBI delimited text has malformed rows. The pipeline skips those lines to finish. Check `data/nbi/logs/nbi_latest_run.log`.
 - ShakeMap files missing: the event product may not include all files. Check `data/hazard/usgs/shakemap/logs/shakemap_ci3144585_run.log`.
 

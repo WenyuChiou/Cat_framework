@@ -7,8 +7,6 @@ Now includes full CAT model pipeline: Hazard -> Exposure -> Vulnerability -> Los
 
 Usage:
     python main.py                      # Full analysis (requires data files)
-    python main.py --download           # Download data files first, then analyze
-    python main.py --download-only      # Download data files only (no analysis)
     python main.py --download-pipeline  # Download + process via nbi_ingest.py
     python main.py --fragility-only     # Run fragility analysis without real data
     python main.py --pipeline           # Deterministic Northridge end-to-end
@@ -398,16 +396,6 @@ def main():
         description="Bridge Fragility Analysis — Hazus Method, Northridge Case Study"
     )
     parser.add_argument(
-        "--download",
-        action="store_true",
-        help="Download ShakeMap and NBI data files to data/",
-    )
-    parser.add_argument(
-        "--download-only",
-        action="store_true",
-        help="Download data only and exit (no analysis)",
-    )
-    parser.add_argument(
         "--download-pipeline",
         action="store_true",
         help="Download + process data via broker/utils/nbi_ingest.py",
@@ -455,11 +443,6 @@ def main():
         print("[Pipeline] Running:", " ".join(cmd))
         subprocess.check_call(cmd)
         return
-
-    if args.download or args.download_only:
-        run_data_download()
-        if args.download_only:
-            return
 
     if args.pipeline:
         run_pipeline(

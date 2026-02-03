@@ -29,22 +29,16 @@ python broker/utils/nbi_ingest.py --download
 python broker/utils/nbi_ingest.py --download --nbi-year 1994 --usgs-event ci3144585
 ```
 
-4. Run the main analysis after data is ready:
-
-```bash
-python main.py
-```
-
-Download only via main.py (no analysis):
-
-```bash
-python main.py --download-only
-```
-
-Download + process via pipeline (clean/curated outputs):
+4. Download + process via pipeline (clean/curated outputs):
 
 ```bash
 python main.py --download-pipeline
+```
+
+5. Run the main analysis after data is ready:
+
+```bash
+python main.py
 ```
 
 Optional modes:
@@ -68,7 +62,7 @@ ls data/hazard/usgs/shakemap/logs
 
 ## Common Issues
 
-- `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python broker/utils/nbi_ingest.py --download`, or update the resolver in `broker/utils/nbi_ingest.py`.
+- `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python main.py --download-pipeline`, or update the resolver in `broker/utils/nbi_ingest.py`.
 - Many `ParserWarning` lines: NBI delimited text has malformed rows. The pipeline skips those lines to finish. Check `data/nbi/logs/nbi_latest_run.log`.
 - ShakeMap files missing: the event product may not include all files. Check `data/hazard/usgs/shakemap/logs/shakemap_ci3144585_run.log`.
 
