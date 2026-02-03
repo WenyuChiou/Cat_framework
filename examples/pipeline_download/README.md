@@ -35,6 +35,12 @@ python broker/utils/nbi_ingest.py --download --nbi-year 1994 --usgs-event ci3144
 python main.py
 ```
 
+Download only via main.py (no analysis):
+
+```bash
+python main.py --download-only
+```
+
 Optional modes:
 
 ```bash

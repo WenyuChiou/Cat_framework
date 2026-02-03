@@ -89,6 +89,9 @@ python main.py --fragility-only
 # 4. Download USGS ShakeMap + FHWA NBI data, then run full data analysis
 python main.py --download
 python main.py
+
+# 5. Download only (no analysis)
+python main.py --download-only
 ```
 
 
@@ -103,6 +106,9 @@ python broker/utils/nbi_ingest.py --download
 
 # C) Run the main analysis after data is ready
 python main.py
+
+# C2) Download only via main.py (no analysis)
+python main.py --download-only
 
 # D) Deterministic or probabilistic modes
 python main.py --pipeline

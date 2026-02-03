@@ -8,6 +8,7 @@ Now includes full CAT model pipeline: Hazard -> Exposure -> Vulnerability -> Los
 Usage:
     python main.py                      # Full analysis (requires data files)
     python main.py --download           # Download data files first, then analyze
+    python main.py --download-only      # Download data files only (no analysis)
     python main.py --fragility-only     # Run fragility analysis without real data
     python main.py --pipeline           # Deterministic Northridge end-to-end
     python main.py --probabilistic      # Stochastic event set -> EP curve + AAL
@@ -400,6 +401,11 @@ def main():
         help="Download ShakeMap and NBI data files to data/",
     )
     parser.add_argument(
+        "--download-only",
+        action="store_true",
+        help="Download data only and exit (no analysis)",
+    )
+    parser.add_argument(
         "--fragility-only",
         action="store_true",
         help="Run fragility curve analysis only (no real data needed)",
@@ -434,8 +440,10 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.download:
+    if args.download or args.download_only:
         run_data_download()
+        if args.download_only:
+            return
 
     if args.pipeline:
         run_pipeline(
