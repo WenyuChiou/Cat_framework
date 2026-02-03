@@ -440,6 +440,27 @@ nbi = classify_nbi_to_hazus(nbi)
 ### Notes
 
 - Downloads are large and should not be committed.
+
+### Verify outputs
+
+```bash
+# Check NBI outputs
+ls data/nbi/clean
+ls data/nbi/curated
+ls data/nbi/logs
+
+# Check ShakeMap outputs
+ls data/hazard/usgs/shakemap/raw
+ls data/hazard/usgs/shakemap/logs
+```
+
+### Common issues
+
+- `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python broker/utils/nbi_ingest.py --download` later, or update the resolver in `broker/utils/nbi_ingest.py`.
+- Many `ParserWarning` lines: NBI delimited text has malformed rows. The pipeline skips those lines to finish. Check `data/nbi/logs/nbi_latest_run.log`.
+- ShakeMap files missing: the event product may not include all files. Check `data/hazard/usgs/shakemap/logs/shakemap_ci3144585_run.log`.
+
+
 - If you already ran `broker/utils/nbi_ingest.py`, the files are under `data/nbi/` and `data/hazard/usgs/shakemap/`.
 
 ## API Usage Examples
