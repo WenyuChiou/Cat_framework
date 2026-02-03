@@ -91,22 +91,6 @@ def run_fragility_analysis():
     _run_verification(im_values)
 
 
-def run_data_download():
-    """Download ShakeMap and NBI data files."""
-    from src.data_loader import download_all
-
-    print("=" * 60)
-    print("Downloading Hazard & Bridge Data")
-    print("=" * 60)
-    print()
-    paths = download_all()
-    print()
-    print("Downloaded files:")
-    for name, path in paths.items():
-        print(f"  {name}: {path}")
-    print()
-
-
 def run_data_analysis():
     """Load real data and run integrated analysis."""
     from src.data_loader import (

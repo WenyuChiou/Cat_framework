@@ -1,9 +1,7 @@
 """
-Data download and parsing for USGS ShakeMap and FHWA NBI bridge inventory.
+Data parsing for USGS ShakeMap and FHWA NBI bridge inventory.
 
-Provides two main workflows:
-  1. Download raw files from USGS / FHWA to data/ directory
-  2. Parse local files into pandas DataFrames for analysis
+This module parses local files into pandas DataFrames for analysis.
 
 ShakeMap: Northridge earthquake (ci3144585) grid.xml
   - Contains PGA, PGV, Sa(0.3s), Sa(1.0s), Sa(3.0s) at grid points
@@ -24,140 +22,11 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Default paths and URLs
+# Default paths
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = _PROJECT_ROOT / "data"
-
-SHAKEMAP_URL = (
-    "https://earthquake.usgs.gov/product/shakemap/ci3144585/"
-    "atlas/1594159786829/download/grid.xml"
-)
-SHAKEMAP_STATION_URL = (
-    "https://earthquake.usgs.gov/product/shakemap/ci3144585/"
-    "atlas/1594159786829/download/stationlist.json"
-)
-NBI_CA_URL = (
-    "https://www.fhwa.dot.gov/bridge/nbi/2024/delimited/CA24.txt"
-)
-
-# ---------------------------------------------------------------------------
-# Download helpers
-# ---------------------------------------------------------------------------
-
-
-def _ensure_data_dir() -> Path:
-    """Create the data/ directory if it does not exist."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return DATA_DIR
-
-
-def download_shakemap(
-    url: str = SHAKEMAP_URL,
-    dest: Optional[Union[str, Path]] = None,
-) -> Path:
-    """
-    Download USGS ShakeMap grid.xml for the Northridge earthquake.
-
-    Parameters
-    ----------
-    url : str
-        ShakeMap grid.xml download URL.
-    dest : path-like, optional
-        Destination file path.  Defaults to data/grid.xml.
-
-    Returns
-    -------
-    Path
-        Path to the downloaded file.
-    """
-    import requests
-
-    dest = Path(dest) if dest else _ensure_data_dir() / "grid.xml"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"Downloading ShakeMap grid.xml → {dest}")
-    resp = requests.get(url, timeout=120)
-    resp.raise_for_status()
-    dest.write_bytes(resp.content)
-    print(f"  Downloaded {len(resp.content):,} bytes")
-    return dest
-
-
-def download_shakemap_stations(
-    url: str = SHAKEMAP_STATION_URL,
-    dest: Optional[Union[str, Path]] = None,
-) -> Path:
-    """
-    Download ShakeMap station list (JSON) for recorded ground motions.
-
-    Parameters
-    ----------
-    url : str
-        Station list JSON URL.
-    dest : path-like, optional
-        Destination file path.  Defaults to data/stationlist.json.
-
-    Returns
-    -------
-    Path
-        Path to the downloaded file.
-    """
-    import requests
-
-    dest = Path(dest) if dest else _ensure_data_dir() / "stationlist.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"Downloading ShakeMap stationlist.json → {dest}")
-    resp = requests.get(url, timeout=120)
-    resp.raise_for_status()
-    dest.write_bytes(resp.content)
-    print(f"  Downloaded {len(resp.content):,} bytes")
-    return dest
-
-
-def download_nbi(
-    url: str = NBI_CA_URL,
-    dest: Optional[Union[str, Path]] = None,
-) -> Path:
-    """
-    Download National Bridge Inventory data for California.
-
-    Parameters
-    ----------
-    url : str
-        NBI delimited file URL.
-    dest : path-like, optional
-        Destination file path.  Defaults to data/CA24.txt.
-
-    Returns
-    -------
-    Path
-        Path to the downloaded file.
-    """
-    import requests
-
-    filename = url.split("/")[-1]
-    dest = Path(dest) if dest else _ensure_data_dir() / filename
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"Downloading NBI data → {dest}")
-    resp = requests.get(url, timeout=300)
-    resp.raise_for_status()
-    dest.write_bytes(resp.content)
-    print(f"  Downloaded {len(resp.content):,} bytes")
-    return dest
-
-
-def download_all() -> dict[str, Path]:
-    """Download all data files.  Returns dict of {name: path}."""
-    return {
-        "shakemap_grid": download_shakemap(),
-        "shakemap_stations": download_shakemap_stations(),
-        "nbi": download_nbi(),
-    }
-
 
 # ---------------------------------------------------------------------------
 # ShakeMap grid.xml parser
@@ -188,7 +57,7 @@ def parse_shakemap_grid(filepath: Union[str, Path]) -> pd.DataFrame:
     if not filepath.exists():
         raise FileNotFoundError(
             f"ShakeMap file not found: {filepath}\n"
-            f"Run download_shakemap() first or place grid.xml in {DATA_DIR}"
+            f"Run: python main.py --download-pipeline"
         )
 
     tree = ET.parse(filepath)
@@ -256,7 +125,7 @@ def parse_shakemap_stations(filepath: Union[str, Path]) -> pd.DataFrame:
     if not filepath.exists():
         raise FileNotFoundError(
             f"Station list not found: {filepath}\n"
-            f"Run download_shakemap_stations() first."
+            f"Run: python main.py --download-pipeline"
         )
 
     with open(filepath, "r", encoding="utf-8") as f:
@@ -386,7 +255,7 @@ def parse_nbi(
     if not filepath.exists():
         raise FileNotFoundError(
             f"NBI file not found: {filepath}\n"
-            f"Run download_nbi() first or place the file in {DATA_DIR}"
+            f"Run: python main.py --download-pipeline"
         )
 
     # Read the full delimited file — NBI uses comma separation with

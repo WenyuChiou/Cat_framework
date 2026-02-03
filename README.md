@@ -387,7 +387,7 @@ NORTHRIDGE_SCENARIO = EarthquakeScenario(
 |--------|---------|
 | `src/hazus_params.py` | Hazus 6.1 Table 7.9 lognormal fragility parameters for 14 bridge classes |
 | `src/bridge_classes.py` | `BridgeClassification` dataclass and `classify_bridge()` decision tree |
-| `src/data_loader.py` | Download and parse USGS ShakeMap (grid.xml), station recordings (JSON), and FHWA NBI bridge inventory (delimited text) |
+| `src/data_loader.py` | Parse local USGS ShakeMap (grid.xml), station recordings (JSON), and FHWA NBI bridge inventory (delimited text) |
 | `src/northridge_case.py` | 1994 Northridge observed damage statistics (1,600 bridges, 7 collapses) and prediction-vs-observation comparison |
 | `src/plotting.py` | All visualization: fragility curves, ground motion map, loss bar chart, damage distribution, EP curve |
 
