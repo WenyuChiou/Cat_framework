@@ -29,6 +29,20 @@ python broker/utils/nbi_ingest.py --download
 python broker/utils/nbi_ingest.py --download --nbi-year 1994 --usgs-event ci3144585
 ```
 
+4. Run the main analysis after data is ready:
+
+```bash
+python main.py
+```
+
+Optional modes:
+
+```bash
+python main.py --pipeline
+python main.py --probabilistic
+python main.py --fragility-only
+```
+
 ## Expected Outputs
 NBI:
 - `data/nbi/raw/` contains the zip and extracted TXT/CSV
