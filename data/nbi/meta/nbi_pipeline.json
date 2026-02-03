@@ -1,0 +1,16 @@
+﻿{
+  "download": {
+    "nbi": {
+      "year": 1994,
+      "format": "delimited",
+      "scope": "all_states_single",
+      "overwrite": false,
+      "unzip": true
+    },
+    "usgs_shakemap": {
+      "event_id": "ci3144585",
+      "files": ["grid.xml.zip", "shape.zip", "info.json"],
+      "overwrite": false
+    }
+  }
+}

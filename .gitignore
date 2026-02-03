@@ -11,6 +11,15 @@ output/*.csv
 data/grid.xml
 data/stationlist.json
 data/CA24.txt
+data/nbi/raw/
+data/nbi/clean/
+data/nbi/curated/
+data/nbi/logs/
+data/nbi/meta/*.json
+!data/nbi/meta/nbi_pipeline.json
+data/hazard/usgs/shakemap/raw/
+data/hazard/usgs/shakemap/logs/
+data/hazard/usgs/shakemap/meta/
 
 # Windows
 desktop.ini
