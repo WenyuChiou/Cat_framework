@@ -9,6 +9,7 @@ Usage:
     python main.py                      # Full analysis (requires data files)
     python main.py --download           # Download data files first, then analyze
     python main.py --download-only      # Download data files only (no analysis)
+    python main.py --download-pipeline  # Download + process via nbi_ingest.py
     python main.py --fragility-only     # Run fragility analysis without real data
     python main.py --pipeline           # Deterministic Northridge end-to-end
     python main.py --probabilistic      # Stochastic event set -> EP curve + AAL
@@ -20,6 +21,7 @@ Usage:
 import argparse
 import os
 import sys
+import subprocess
 
 import numpy as np
 
@@ -406,6 +408,11 @@ def main():
         help="Download data only and exit (no analysis)",
     )
     parser.add_argument(
+        "--download-pipeline",
+        action="store_true",
+        help="Download + process data via broker/utils/nbi_ingest.py",
+    )
+    parser.add_argument(
         "--fragility-only",
         action="store_true",
         help="Run fragility curve analysis only (no real data needed)",
@@ -439,6 +446,15 @@ def main():
         help="Number of stochastic events for probabilistic mode (default: 50)",
     )
     args = parser.parse_args()
+
+    if args.download_pipeline:
+        ingest_path = os.path.join(
+            os.path.dirname(__file__), "broker", "utils", "nbi_ingest.py"
+        )
+        cmd = [sys.executable, ingest_path, "--download"]
+        print("[Pipeline] Running:", " ".join(cmd))
+        subprocess.check_call(cmd)
+        return
 
     if args.download or args.download_only:
         run_data_download()

@@ -92,6 +92,9 @@ python main.py
 
 # 5. Download only (no analysis)
 python main.py --download-only
+
+# 6. Download + process via pipeline (clean/curated outputs)
+python main.py --download-pipeline
 ```
 
 
@@ -109,6 +112,9 @@ python main.py
 
 # C2) Download only via main.py (no analysis)
 python main.py --download-only
+
+# C3) Download + process via main.py (pipeline)
+python main.py --download-pipeline
 
 # D) Deterministic or probabilistic modes
 python main.py --pipeline

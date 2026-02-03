@@ -41,6 +41,12 @@ Download only via main.py (no analysis):
 python main.py --download-only
 ```
 
+Download + process via pipeline (clean/curated outputs):
+
+```bash
+python main.py --download-pipeline
+```
+
 Optional modes:
 
 ```bash
