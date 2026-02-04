@@ -97,28 +97,47 @@ def _latest_source(sources: List[RawSource]) -> RawSource:
     return max(sources, key=lambda s: s.path.stat().st_mtime)
 
 
-def _read_csv_from_zip(zpath: Path, inner_name: str, delimiter: str, quotechar: str) -> pd.DataFrame:
+def _read_csv_from_zip(
+    zpath: Path,
+    inner_name: str,
+    delimiter: str,
+    quotechar: str,
+) -> Tuple[pd.DataFrame, int]:
     with zipfile.ZipFile(zpath, "r") as zf:
         with zf.open(inner_name) as f:
             warnings.filterwarnings("ignore", category=pd.errors.ParserWarning)
-            return pd.read_csv(
+            bad_lines = {"count": 0}
+
+            def _count_bad_line(_: List[str]) -> None:
+                bad_lines["count"] += 1
+                return None
+
+            df = pd.read_csv(
                 f,
                 sep=delimiter,
                 quotechar=quotechar,
                 engine="python",
-                on_bad_lines="skip",
+                on_bad_lines=_count_bad_line,
             )
+            return df, bad_lines["count"]
 
 
-def _read_csv(path: Path, delimiter: str, quotechar: str) -> pd.DataFrame:
+def _read_csv(path: Path, delimiter: str, quotechar: str) -> Tuple[pd.DataFrame, int]:
     warnings.filterwarnings("ignore", category=pd.errors.ParserWarning)
-    return pd.read_csv(
+    bad_lines = {"count": 0}
+
+    def _count_bad_line(_: List[str]) -> None:
+        bad_lines["count"] += 1
+        return None
+
+    df = pd.read_csv(
         path,
         sep=delimiter,
         quotechar=quotechar,
         engine="python",
-        on_bad_lines="skip",
+        on_bad_lines=_count_bad_line,
     )
+    return df, bad_lines["count"]
 
 
 def _clean_strings(df: pd.DataFrame) -> pd.DataFrame:
@@ -135,7 +154,14 @@ def _clean_strings(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _write_meta(meta_path: Path, source: RawSource, df: pd.DataFrame, config_path: Optional[Path], tag: str) -> None:
+def _write_meta(
+    meta_path: Path,
+    source: RawSource,
+    df: pd.DataFrame,
+    config_path: Optional[Path],
+    tag: str,
+    bad_lines: int,
+) -> None:
     meta = {
         "tag": tag,
         "generated_at_utc": _now_iso(),
@@ -146,6 +172,7 @@ def _write_meta(meta_path: Path, source: RawSource, df: pd.DataFrame, config_pat
         },
         "rows": int(df.shape[0]),
         "columns": int(df.shape[1]),
+        "bad_lines_skipped": int(bad_lines),
         "column_names": list(df.columns),
         "null_counts": {c: int(df[c].isna().sum()) for c in df.columns},
         "pipeline_config": str(config_path) if config_path else None,
@@ -208,10 +235,12 @@ def _run_one(
     _ensure_dir(curated_dir)
 
     if source.source_type == "csv":
-        df_raw = _read_csv(source.path, delimiter, quotechar)
+        df_raw, bad_lines = _read_csv(source.path, delimiter, quotechar)
     else:
         assert source.inner_csv
-        df_raw = _read_csv_from_zip(source.path, source.inner_csv, delimiter, quotechar)
+        df_raw, bad_lines = _read_csv_from_zip(
+            source.path, source.inner_csv, delimiter, quotechar
+        )
 
     df_clean = _clean_strings(df_raw)
 
@@ -225,13 +254,21 @@ def _run_one(
 
     df_clean.to_csv(clean_path, index=False)
     df_curated.to_csv(curated_path, index=False)
-    _write_meta(meta_path, source, df_clean, (meta_dir / "nbi_pipeline.json") if config else None, tag)
+    _write_meta(
+        meta_path,
+        source,
+        df_clean,
+        (meta_dir / "nbi_pipeline.json") if config else None,
+        tag,
+        bad_lines,
+    )
 
     log_lines = [
         f"run_utc={_now_iso()}",
         f"raw_source={source.path}",
         f"source_type={source.source_type}",
         f"inner_csv={source.inner_csv}",
+        f"bad_lines_skipped={bad_lines}",
         f"rows={df_clean.shape[0]}",
         f"cols={df_clean.shape[1]}",
         f"clean_out={clean_path}",
