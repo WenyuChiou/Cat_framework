@@ -161,6 +161,7 @@ def _write_meta(
     config_path: Optional[Path],
     tag: str,
     bad_lines: int,
+    state_filter: Optional[str],
 ) -> None:
     meta = {
         "tag": tag,
@@ -173,6 +174,7 @@ def _write_meta(
         "rows": int(df.shape[0]),
         "columns": int(df.shape[1]),
         "bad_lines_skipped": int(bad_lines),
+        "state_filter": state_filter,
         "column_names": list(df.columns),
         "null_counts": {c: int(df[c].isna().sum()) for c in df.columns},
         "pipeline_config": str(config_path) if config_path else None,
@@ -204,6 +206,28 @@ def _apply_curated_rules(df: pd.DataFrame, config: Optional[Dict[str, object]]) 
         curated = curated[keep_set]
 
     return curated
+
+
+def _apply_state_filter(df: pd.DataFrame, config: Optional[Dict[str, object]]) -> Tuple[pd.DataFrame, Optional[str]]:
+    if not config:
+        return df, None
+
+    state_code = None
+    state_column = None
+    if isinstance(config, dict):
+        state_code = config.get("state_code_filter")
+        state_column = config.get("state_code_column")
+
+    if not state_code or not state_column:
+        return df, None
+
+    if state_column not in df.columns:
+        return df, f"{state_column} (missing)"
+
+    series = df[state_column].astype("string").str.strip()
+    target = str(state_code).zfill(2)
+    filtered = df[series == target]
+    return filtered, f"{state_column}={target}"
 
 
 def _write_log(log_path: Path, lines: Iterable[str]) -> None:
@@ -242,9 +266,9 @@ def _run_one(
             source.path, source.inner_csv, delimiter, quotechar
         )
 
-    df_clean = _clean_strings(df_raw)
-
     config = _load_pipeline_config(meta_dir)
+    df_filtered, state_filter = _apply_state_filter(df_raw, config)
+    df_clean = _clean_strings(df_filtered)
     df_curated = _apply_curated_rules(df_clean, config)
 
     clean_path = clean_dir / f"nbi_{tag}_clean.csv"
@@ -261,6 +285,7 @@ def _run_one(
         (meta_dir / "nbi_pipeline.json") if config else None,
         tag,
         bad_lines,
+        state_filter,
     )
 
     log_lines = [
@@ -269,6 +294,7 @@ def _run_one(
         f"source_type={source.source_type}",
         f"inner_csv={source.inner_csv}",
         f"bad_lines_skipped={bad_lines}",
+        f"state_filter={state_filter}",
         f"rows={df_clean.shape[0]}",
         f"cols={df_clean.shape[1]}",
         f"clean_out={clean_path}",

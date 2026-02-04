@@ -12,5 +12,7 @@
       "files": ["grid.xml.zip", "shape.zip", "info.json"],
       "overwrite": false
     }
-  }
+  },
+  "state_code_filter": "06",
+  "state_code_column": "STATE_CODE_001"
 }
