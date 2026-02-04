@@ -293,10 +293,12 @@ def run_ingest(
     if process_all:
         for source in sources:
             tag = _slug_for_source(source)
+            print(f"[NBI] Ingesting source: {source.path}")
             outputs.append(_run_one(source, out_dir, delimiter, quotechar, tag))
         return outputs
 
     latest = _latest_source(sources)
+    print(f"[NBI] Ingesting latest source: {latest.path}")
     outputs.append(_run_one(latest, out_dir, delimiter, quotechar, "latest"))
     return outputs
 
@@ -331,13 +333,18 @@ def _resolve_fhwa_zip_url(disclaimer_url: str, base_url: str) -> str:
 
 def _download_nbi(year: int, raw_dir: Path, overwrite: bool, scope: str, unzip: bool) -> Path:
     scope_key = _scope_key(scope)
+    print(f"[NBI] Resolving FHWA download link (year={year}, scope={scope})...")
     disclaimer_url = _find_fhwa_disclaimer_url(year, scope_key)
+    print(f"[NBI] Disclaimer URL: {disclaimer_url}")
     final_url = _resolve_fhwa_zip_url(disclaimer_url, "https://www.fhwa.dot.gov/")
+    print(f"[NBI] Downloading ZIP: {final_url}")
 
     dest = raw_dir / f"nbi_{year}_delimited_{scope}.zip"
     _download_file(final_url, dest, overwrite)
     if unzip:
+        print(f"[NBI] Extracting ZIP to {raw_dir}...")
         _extract_zip(dest, raw_dir, overwrite)
+    print(f"[NBI] Download complete: {dest}")
     return dest
 
 
@@ -350,6 +357,7 @@ def _pick_preferred_product(products: List[Dict[str, object]]) -> Dict[str, obje
 
 def _download_usgs_shakemap(event_id: str, hazard_dir: Path, files: List[str], overwrite: bool) -> List[Path]:
     detail_url = f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{event_id}.geojson"
+    print(f"[ShakeMap] Fetching event detail: {detail_url}")
     data = json.loads(_fetch_text(detail_url))
 
     products = data.get("properties", {}).get("products", {}).get("shakemap", [])
@@ -388,6 +396,7 @@ def _download_usgs_shakemap(event_id: str, hazard_dir: Path, files: List[str], o
         return None
 
     downloaded: List[Path] = []
+    print(f"[ShakeMap] Downloading files: {files}")
     for fname in files:
         key = _resolve_content_key(fname)
         if not key:
@@ -397,6 +406,7 @@ def _download_usgs_shakemap(event_id: str, hazard_dir: Path, files: List[str], o
             continue
         url = entry["url"]
         dest = raw_dir / Path(key).name
+        print(f"[ShakeMap] Downloading {Path(key).name} -> {dest}")
         _download_file(url, dest, overwrite)
         downloaded.append(dest)
 
@@ -449,14 +459,18 @@ def run_downloads(
     if nbi_year:
         if nbi_format != "delimited":
             raise ValueError("Only delimited NBI downloads are supported.")
+        print("[Pipeline] NBI download starting...")
         _download_nbi(int(nbi_year), raw_dir, nbi_overwrite, str(nbi_scope), nbi_unzip)
+        print("[Pipeline] NBI download done.")
 
     usgs_event = usgs_event_override or usgs_cfg.get("event_id")
     usgs_files = usgs_cfg.get("files") if isinstance(usgs_cfg.get("files"), list) else None
     usgs_overwrite = bool(usgs_cfg.get("overwrite", False))
     if usgs_event:
         files = usgs_files or ["grid.xml.zip", "shape.zip", "info.json"]
+        print("[Pipeline] ShakeMap download starting...")
         _download_usgs_shakemap(str(usgs_event), hazard_dir, files, usgs_overwrite)
+        print("[Pipeline] ShakeMap download done.")
 
 
 def main() -> None:
