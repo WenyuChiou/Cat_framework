@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import argparse
+import warnings
 import html
 import json
 import re
@@ -99,22 +100,24 @@ def _latest_source(sources: List[RawSource]) -> RawSource:
 def _read_csv_from_zip(zpath: Path, inner_name: str, delimiter: str, quotechar: str) -> pd.DataFrame:
     with zipfile.ZipFile(zpath, "r") as zf:
         with zf.open(inner_name) as f:
+            warnings.filterwarnings("ignore", category=pd.errors.ParserWarning)
             return pd.read_csv(
                 f,
                 sep=delimiter,
                 quotechar=quotechar,
                 engine="python",
-                on_bad_lines="warn",
+                on_bad_lines="skip",
             )
 
 
 def _read_csv(path: Path, delimiter: str, quotechar: str) -> pd.DataFrame:
+    warnings.filterwarnings("ignore", category=pd.errors.ParserWarning)
     return pd.read_csv(
         path,
         sep=delimiter,
         quotechar=quotechar,
         engine="python",
-        on_bad_lines="warn",
+        on_bad_lines="skip",
     )
 
 
