@@ -225,6 +225,7 @@ def _apply_state_filter(df: pd.DataFrame, config: Optional[Dict[str, object]]) -
         return df, f"{state_column} (missing)"
 
     series = df[state_column].astype("string").str.strip()
+    series = series.str.extract(r"(\d+)")[0].str.zfill(2)
     target = str(state_code).zfill(2)
     filtered = df[series == target]
     return filtered, f"{state_column}={target}"
