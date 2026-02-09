@@ -7,6 +7,7 @@ Now includes full CAT model pipeline: Hazard -> Exposure -> Vulnerability -> Los
 
 Usage:
     python main.py                      # Full analysis (requires data files)
+    python main.py --download-hazard    # Download USGS hazard data (ShakeMap + curves)
     python main.py --download-pipeline  # Download + process via nbi_ingest.py
     python main.py --fragility-only     # Run fragility analysis without real data
     python main.py --pipeline           # Deterministic Northridge end-to-end
@@ -417,7 +418,35 @@ def main():
         default=50,
         help="Number of stochastic events for probabilistic mode (default: 50)",
     )
+    parser.add_argument(
+        "--download-hazard",
+        action="store_true",
+        help="Download USGS hazard data (ShakeMap + hazard curves) for Northridge",
+    )
+    parser.add_argument(
+        "--hazard-event",
+        type=str,
+        default="ci3144585",
+        help="USGS event ID for ShakeMap download (default: ci3144585 = Northridge)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing downloaded files",
+    )
     args = parser.parse_args()
+
+    # Handle download-hazard first
+    if args.download_hazard:
+        from src.hazard_download import download_all_hazard_data
+        download_all_hazard_data(
+            event_id=args.hazard_event,
+            overwrite=args.overwrite,
+        )
+        print("\n[Pipeline] Hazard data download complete. Running data processing...")
+        # Continue to run data analysis after download
+        run_data_analysis()
+        return
 
     if args.download_pipeline:
         ingest_path = os.path.join(
