@@ -35,6 +35,7 @@ from src.plotting import (
     plot_loss_by_class,
     plot_ep_curve,
     plot_portfolio_damage,
+    plot_shakemap_grid,
 )
 from src.northridge_case import (
     NORTHRIDGE_GROUND_MOTION,
@@ -164,6 +165,24 @@ def run_data_analysis():
             # Compute expected damage for each bridge using ShakeMap data
             if sm is not None and "PSA10" in sm.columns:
                 _compute_bridge_damage(nbi, sm)
+                
+                # Visualizations for real data
+                print("\n[Analysis] Generating visualizations for real data...")
+                # 1. Plot full ShakeMap area
+                path_sm = plot_shakemap_grid(sm, output_dir=OUTPUT_DIR, filename="shakemap_full_area.png")
+                print(f"  Saved: {path_sm}")
+                
+                # 2. Plot ground motion at bridge sites
+                from src.exposure import SiteParams
+                bridge_sites = [SiteParams(lat=r["latitude"], lon=r["longitude"]) for _, r in nbi.iterrows()]
+                path_gm = plot_ground_motion_field(bridge_sites, nbi["sa_10"].values, output_dir=OUTPUT_DIR, filename="bridge_site_ground_motion.png")
+                print(f"  Saved: {path_gm}")
+                
+                # 3. Plot portfolio damage distribution
+                count_by_ds = {ds: nbi[f"P_{ds}"].mean() * len(nbi) for ds in ["none", "slight", "moderate", "extensive", "complete"]}
+                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="real_portfolio_damage.png")
+                print(f"  Saved: {path_pd}")
+                
         print()
     else:
         print(f"[NBI] No CA*.txt found in {DATA_DIR}")
