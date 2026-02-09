@@ -86,13 +86,15 @@ python main.py --probabilistic
 # 3. Fragility curves only (no hazard/loss, existing analysis)
 python main.py --fragility-only
 
-# 4. Download + process via pipeline (clean/curated outputs)
+# 4. Download USGS hazard data (ShakeMap + auto-processing)
+python main.py --download-hazard
+
+# 5. Download + process via legacy pipeline (NBI + ShakeMap)
 python main.py --download-pipeline
 
-# 5. Run full data analysis after download
+# 6. Run full data analysis after download
 python main.py
 ```
-
 
 ### Full usage (download + run)
 
@@ -120,6 +122,7 @@ python broker/utils/nbi_ingest.py --download --nbi-year 1994 --usgs-event ci3144
 ### Expected outputs (from the pipeline)
 
 NBI:
+
 - `data/nbi/raw/` (zip + extracted TXT/CSV)
 - `data/nbi/clean/nbi_latest_clean.csv`
 - `data/nbi/curated/nbi_latest_curated.csv`
@@ -127,6 +130,7 @@ NBI:
 - `data/nbi/logs/nbi_latest_run.log`
 
 ShakeMap:
+
 - `data/hazard/usgs/shakemap/raw/grid.xml`
 - `data/hazard/usgs/shakemap/raw/shape.zip`
 - `data/hazard/usgs/shakemap/raw/info.json`
@@ -135,15 +139,19 @@ ShakeMap:
 
 ### Configuration flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--n-bridges` | 100 | Number of bridges in synthetic portfolio |
-| `--n-realizations` | 50 | Monte Carlo ground motion field realizations |
-| `--n-events` | 50 | Number of stochastic earthquake events (probabilistic mode) |
+| Flag                | Default   | Description                                                 |
+| ------------------- | --------- | ----------------------------------------------------------- |
+| `--n-bridges`       | 100       | Number of bridges in synthetic portfolio                    |
+| `--n-realizations`  | 50        | Monte Carlo ground motion field realizations                |
+| `--n-events`        | 50        | Number of stochastic earthquake events (probabilistic mode) |
+| `--download-hazard` | -         | Download USGS ShakeMap for Northridge event                 |
+| `--hazard-event`    | ci3144585 | USGS event ID to download (default: Northridge)             |
+| `--overwrite`       | false     | Overwrite existing downloaded files                         |
 
 ```bash
 python main.py --pipeline --n-bridges 200 --n-realizations 100
 python main.py --probabilistic --n-bridges 200 --n-events 100 --n-realizations 30
+python main.py --download-hazard --hazard-event ci3144585
 ```
 
 ---
@@ -163,6 +171,7 @@ ln(Sa) = F_M + F_D + F_S
 where:
 
 **Source (magnitude) term F_M:**
+
 - For M <= M_h (hinge magnitude = 6.75):
   `F_M = e_i + e5*(M - M_h) + e6*(M - M_h)^2`
 - For M > M_h:
@@ -173,21 +182,26 @@ where:
   - e4 = -0.20608 (reverse)
 
 **Distance term F_D:**
+
 ```
 R = sqrt(R_JB^2 + h^2)    where h = 2.54 km (fictitious depth)
 F_D = (c1 + c2*(M - M_h)) * ln(R) + c3*(R - 1)
 ```
+
 - c1 = -0.68898, c2 = 0.21521, c3 = -0.00707
 - R_JB is the Joyner-Boore distance (km), approximated as epicentral distance for point sources
 
 **Site amplification term F_S:**
+
 ```
 F_lin = b_lin * ln(min(Vs30, V_ref) / V_ref)
 ```
+
 - b_lin = -0.60, V_ref = 760 m/s
 - Non-linear correction applied for Vs30 < 300 m/s using PGA on reference rock
 
 **Aleatory uncertainty:**
+
 - Inter-event: tau = 0.255
 - Intra-event: sigma = 0.502
 - Total: sigma_T = 0.564
@@ -207,8 +221,9 @@ The correlation matrix C_ij = rho(h_ij) is constructed for all site pairs.
 #### Ground Motion Field Generation
 
 For each realization k:
-1. Draw inter-event residual: eta_k ~ N(0, tau)  (shared by all sites)
-2. Draw correlated intra-event residuals: eps = L * z * sigma
+
+1. Draw inter-event residual: eta_k ~ N(0, tau) (shared by all sites)
+2. Draw correlated intra-event residuals: eps = L _ z _ sigma
    - L = Cholesky decomposition of C (correlation matrix)
    - z ~ N(0, I) (independent standard normals)
 3. Combine: `ln(Sa_i) = ln(median_i) + eta + eps_i`
@@ -251,6 +266,7 @@ Length adjustment factor: `1.0 + 0.15 * max(0, (length - 100) / 200)` accounts f
 #### Synthetic Portfolio Generation
 
 `generate_synthetic_portfolio(n_bridges, center, radius_km, seed)` creates a portfolio with:
+
 - Realistic Northridge-area HWB class distribution (e.g. HWB5: 14%, HWB3: 12%, HWB17: 10%)
 - Uniform random placement within a disc around the center
 - Random structural dimensions (length 15-120m, width 8-25m)
@@ -273,17 +289,18 @@ where Phi is the standard normal CDF, and (median_ds, beta_ds) are lognormal par
 Parameters are defined for 14 Hazus bridge classes in `src/hazus_params.py`. Example (HWB5 — Multi-Span Concrete Continuous, Conventional):
 
 | Damage State | Median (g) | Beta |
-|:------------|:----------:|:----:|
-| Slight | 0.35 | 0.6 |
-| Moderate | 0.45 | 0.6 |
-| Extensive | 0.55 | 0.6 |
-| Complete | 0.80 | 0.6 |
+| :----------- | :--------: | :--: |
+| Slight       |    0.35    | 0.6  |
+| Moderate     |    0.45    | 0.6  |
+| Extensive    |    0.55    | 0.6  |
+| Complete     |    0.80    | 0.6  |
 
 Seismic-designed bridges (even-numbered HWBs) have 1.5-2x higher median capacities.
 
 #### Discrete Damage State Probabilities
 
 From the exceedance curves, discrete probabilities are computed:
+
 ```
 P[none]      = 1 - P[DS >= slight]
 P[slight]    = P[DS >= slight]    - P[DS >= moderate]
@@ -297,6 +314,7 @@ These five probabilities sum to 1.0 for any given Sa value.
 #### Skew Modification
 
 For skewed bridges, the median capacity is reduced:
+
 ```
 median_modified = median * sqrt(1 - (skew_angle / 90)^2)
 ```
@@ -306,12 +324,12 @@ median_modified = median * sqrt(1 - (skew_angle / 90)^2)
 #### Hazus Damage Ratios (Table 7.11)
 
 | Damage State | Damage Ratio (DR) | Downtime (days) |
-|:------------|:-----------------:|:---------------:|
-| None | 0.00 | 0 |
-| Slight | 0.03 | 0.6 |
-| Moderate | 0.08 | 2.5 |
-| Extensive | 0.25 | 75 |
-| Complete | 1.00 | 230 |
+| :----------- | :---------------: | :-------------: |
+| None         |       0.00        |        0        |
+| Slight       |       0.03        |       0.6       |
+| Moderate     |       0.08        |       2.5       |
+| Extensive    |       0.25        |       75        |
+| Complete     |       1.00        |       230       |
 
 #### Expected Loss per Bridge
 
@@ -324,6 +342,7 @@ where P(ds | Sa_i) is the discrete damage state probability at the site-specific
 #### Portfolio Aggregation
 
 Total expected loss:
+
 ```
 E[L_portfolio] = SUM_i  E[Loss_i]
 Loss_ratio = E[L_portfolio] / SUM_i RC_i
@@ -334,7 +353,7 @@ Loss_ratio = E[L_portfolio] / SUM_i RC_i
 For a set of scenarios with annual rates lambda_i and losses L_i:
 
 1. Sort scenarios by loss (descending)
-2. Cumulative rate: nu(L) = SUM_{L_i >= L} lambda_i
+2. Cumulative rate: nu(L) = SUM\_{L_i >= L} lambda_i
 3. Annual exceedance probability (Poisson): EP(L) = 1 - exp(-nu(L))
 4. Return period: RP(L) = 1 / nu(L)
 
@@ -383,13 +402,13 @@ NORTHRIDGE_SCENARIO = EarthquakeScenario(
 
 ## Supporting Modules
 
-| Module | Purpose |
-|--------|---------|
-| `src/hazus_params.py` | Hazus 6.1 Table 7.9 lognormal fragility parameters for 14 bridge classes |
-| `src/bridge_classes.py` | `BridgeClassification` dataclass and `classify_bridge()` decision tree |
-| `src/data_loader.py` | Parse local USGS ShakeMap (grid.xml), station recordings (JSON), and FHWA NBI bridge inventory (delimited text) |
+| Module                   | Purpose                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `src/hazus_params.py`    | Hazus 6.1 Table 7.9 lognormal fragility parameters for 14 bridge classes                                         |
+| `src/bridge_classes.py`  | `BridgeClassification` dataclass and `classify_bridge()` decision tree                                           |
+| `src/data_loader.py`     | Parse local USGS ShakeMap (grid.xml), station recordings (JSON), and FHWA NBI bridge inventory (delimited text)  |
 | `src/northridge_case.py` | 1994 Northridge observed damage statistics (1,600 bridges, 7 collapses) and prediction-vs-observation comparison |
-| `src/plotting.py` | All visualization: fragility curves, ground motion map, loss bar chart, damage distribution, EP curve |
+| `src/plotting.py`        | All visualization: fragility curves, ground motion map, loss bar chart, damage distribution, EP curve            |
 
 ---
 
@@ -397,17 +416,17 @@ NORTHRIDGE_SCENARIO = EarthquakeScenario(
 
 All plots are saved to `output/` and can be regenerated at any time.
 
-| File | CLI Mode | Description |
-|------|----------|-------------|
-| `ground_motion_field.png` | `--pipeline` | Scatter map of Sa(1.0s) at bridge sites, colored by intensity, epicenter marked |
-| `loss_by_class.png` | `--pipeline` | Bar chart: expected loss per HWB class |
-| `portfolio_damage.png` | `--pipeline` | Stacked horizontal bar: portfolio damage state distribution |
-| `ep_curve.png` | `--probabilistic` | Loss EP curve (left) and loss vs return period (right) |
-| `fragility_HWB*.png` | `--fragility-only` | 4-curve fragility plot per class (14 files) |
-| `comparison_*.png` | `--fragility-only` | Cross-class comparison for slight and complete damage |
-| `damage_distribution_*.png` | `--fragility-only` | Stacked bar charts at 10 intensity levels |
-| `northridge_scenario.png` | `--fragility-only` | HWB5 fragility with observed PGA range overlay |
-| `bridge_damage_results.csv` | default | Per-bridge damage probabilities (requires real data) |
+| File                        | CLI Mode           | Description                                                                     |
+| --------------------------- | ------------------ | ------------------------------------------------------------------------------- |
+| `ground_motion_field.png`   | `--pipeline`       | Scatter map of Sa(1.0s) at bridge sites, colored by intensity, epicenter marked |
+| `loss_by_class.png`         | `--pipeline`       | Bar chart: expected loss per HWB class                                          |
+| `portfolio_damage.png`      | `--pipeline`       | Stacked horizontal bar: portfolio damage state distribution                     |
+| `ep_curve.png`              | `--probabilistic`  | Loss EP curve (left) and loss vs return period (right)                          |
+| `fragility_HWB*.png`        | `--fragility-only` | 4-curve fragility plot per class (14 files)                                     |
+| `comparison_*.png`          | `--fragility-only` | Cross-class comparison for slight and complete damage                           |
+| `damage_distribution_*.png` | `--fragility-only` | Stacked bar charts at 10 intensity levels                                       |
+| `northridge_scenario.png`   | `--fragility-only` | HWB5 fragility with observed PGA range overlay                                  |
+| `bridge_damage_results.csv` | default            | Per-bridge damage probabilities (requires real data)                            |
 
 ---
 
@@ -416,6 +435,7 @@ All plots are saved to `output/` and can be regenerated at any time.
 ### Overview
 
 This project integrates two data sources:
+
 - **USGS ShakeMap** for ground motion intensity (grid.xml, shape.zip, info.json)
 - **FHWA NBI** for bridge inventory (delimited TXT/CSV)
 
@@ -464,7 +484,6 @@ ls data/hazard/usgs/shakemap/logs
 - `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python main.py --download-pipeline` later, or update the resolver in `broker/utils/nbi_ingest.py`.
 - Many `ParserWarning` lines: NBI delimited text has malformed rows. The pipeline skips those lines to finish. Check `data/nbi/logs/nbi_latest_run.log`.
 - ShakeMap files missing: the event product may not include all files. Check `data/hazard/usgs/shakemap/logs/shakemap_ci3144585_run.log`.
-
 
 - If you already ran `broker/utils/nbi_ingest.py`, the files are under `data/nbi/` and `data/hazard/usgs/shakemap/`.
 
@@ -529,9 +548,9 @@ print(f"Sa = {sa:.3f}g, E[Loss] = ${result.expected_loss:,.0f}")
 
 ## References
 
-1. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA at Spectral Periods between 0.01s and 10.0s. *Earthquake Spectra*, 24(1), 99-138.
-2. Jayaram, N. & Baker, J.W. (2009). Correlation model for spatially distributed ground-motion intensities. *Earthquake Engineering & Structural Dynamics*, 38(15), 1687-1708.
-3. FEMA (2024). *Hazus 6.1 Earthquake Model Technical Manual*. Federal Emergency Management Agency.
+1. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA at Spectral Periods between 0.01s and 10.0s. _Earthquake Spectra_, 24(1), 99-138.
+2. Jayaram, N. & Baker, J.W. (2009). Correlation model for spatially distributed ground-motion intensities. _Earthquake Engineering & Structural Dynamics_, 38(15), 1687-1708.
+3. FEMA (2024). _Hazus 6.1 Earthquake Model Technical Manual_. Federal Emergency Management Agency.
 4. Basoz, N. & Kiremidjian, A. (1998). Evaluation of Bridge Damage Data from the Loma Prieta and Northridge, CA Earthquakes. MCEER-98-0004.
 5. Werner, S.D., et al. (2006). Seismic Risk Analysis of Highway Systems. MCEER-06-0011.
 6. Caltrans (1994). The Northridge Earthquake: Post-Earthquake Investigation Report.
