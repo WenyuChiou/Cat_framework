@@ -506,3 +506,68 @@ def plot_portfolio_damage(
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path
+
+
+def plot_shakemap_grid(
+    shakemap_df: pd.DataFrame,
+    intensity_measure: str = "PSA10",
+    output_dir: str = "output",
+    filename: str = "shakemap_map.png",
+) -> str:
+    """
+    Plot the full ShakeMap intensity grid to show the downloaded area.
+
+    Parameters
+    ----------
+    shakemap_df : pd.DataFrame
+        DataFrame from data_loader.load_shakemap().
+    intensity_measure : str
+        Column name to plot (e.g. "PSA10", "PGA").
+    output_dir : str
+    filename : str
+
+    Returns
+    -------
+    str
+        Path to saved figure.
+    """
+    if intensity_measure not in shakemap_df.columns:
+        # Fallback logic
+        candidates = ["PSA10", "PGA", "PSA03"]
+        for c in candidates:
+            if c in shakemap_df.columns:
+                intensity_measure = c
+                break
+        else:
+            # Last resort: first numeric column after LAT/LON
+            intensity_measure = shakemap_df.select_dtypes(include=[np.number]).columns[2]
+
+    lats = shakemap_df["LAT"].values
+    lons = shakemap_df["LON"].values
+    vals = shakemap_df[intensity_measure].values
+
+    # Sample for performance if grid is huge (matplotlib scatter is slow)
+    if len(shakemap_df) > 50000:
+        idx = np.random.choice(len(shakemap_df), 50000, replace=False)
+        lats, lons, vals = lats[idx], lons[idx], vals[idx]
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sc = ax.scatter(
+        lons, lats, c=vals, cmap="YlOrRd",
+        s=2, alpha=0.6, edgecolors="none",
+        vmin=0, vmax=max(0.5, np.percentile(vals, 98)),
+    )
+    cbar = fig.colorbar(sc, ax=ax, shrink=0.8)
+    cbar.set_label(f"{intensity_measure} [g]", fontsize=11)
+
+    ax.set_xlabel("Longitude", fontsize=12)
+    ax.set_ylabel("Latitude", fontsize=12)
+    ax.set_title(f"USGS ShakeMap Grid — {intensity_measure}", fontsize=13, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
