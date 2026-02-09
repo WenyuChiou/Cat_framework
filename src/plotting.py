@@ -11,6 +11,7 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
+import pandas as pd
 
 from .fragility import compute_all_curves, damage_state_probabilities
 from .hazus_params import HAZUS_BRIDGE_FRAGILITY, DAMAGE_STATE_ORDER
@@ -568,6 +569,101 @@ def plot_shakemap_grid(
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
     fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_bridge_damage_map(
+    nbi_df: pd.DataFrame,
+    damage_state: str = "complete",
+    output_dir: str = "output",
+    filename: str = "bridge_damage_map.png",
+) -> str:
+    """
+    Plot a map of bridges colored by their probability of being in a certain damage state.
+    """
+    col = f"P_{damage_state}"
+    if col not in nbi_df.columns:
+        col = "sa_10"  # fallback to ground motion
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sc = ax.scatter(
+        nbi_df["longitude"], nbi_df["latitude"], 
+        c=nbi_df[col], cmap="Reds", s=15, edgecolors="k", linewidths=0.2,
+        vmin=0, vmax=max(0.1, nbi_df[col].max())
+    )
+    cbar = fig.colorbar(sc, ax=ax, shrink=0.8)
+    cbar.set_label(f"Probability of {damage_state.capitalize()} Damage", fontsize=11)
+
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title(f"Bridge Damage Spatial Distribution — {damage_state.capitalize()}", fontsize=13, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_analysis_summary(
+    stats_dict: dict,
+    output_dir: str = "output",
+    filename: str = "analysis_dashboard.png",
+) -> str:
+    """
+    Create a 2x2 dashboard summary of the analysis results.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle("CAT411 — Bridge Risk Analysis Dashboard", fontsize=18, fontweight="bold")
+
+    # 1. Damage Distribution (Ax 0,0)
+    ds_counts = stats_dict.get("damage_distribution", {})
+    all_ds = ["none", "slight", "moderate", "extensive", "complete"]
+    counts = [ds_counts.get(ds, 0) for ds in all_ds]
+    colors = ["#4CAF50", "#2196F3", "#FF9800", "#F44336", "#9C27B0"]
+    axes[0,0].bar(all_ds, counts, color=colors, edgecolor="k")
+    axes[0,0].set_title("Portfolio Damage State Distribution")
+    axes[0,0].set_ylabel("Bridge Count")
+
+    # 2. Key Metrics Text (Ax 0,1)
+    axes[0,1].axis('off')
+    metrics_text = (
+        f"Total Bridges: {stats_dict.get('total_bridges', 'N/A')}\n\n"
+        f"Scenario: {stats_dict.get('event_id', 'Northridge')}\n"
+        f"Max PGA: {stats_dict.get('max_pga', 0):.3f}g\n"
+        f"Avg Sa(1.0s): {stats_dict.get('avg_sa', 0):.3f}g\n\n"
+        f"Estimated Economic Impact:\n"
+        f"Expected Loss: ${stats_dict.get('total_loss', 0):,.0f}"
+    )
+    axes[0,1].text(0.1, 0.5, metrics_text, fontsize=14, family='monospace', va='center')
+    axes[0,1].set_title("Core Risk Metrics")
+
+    # 3. Ground Motion at Site (Ax 1,0)
+    sa_vals = stats_dict.get("sa_values", [])
+    if len(sa_vals) > 0:
+        axes[1,0].hist(sa_vals, bins=20, color="gray", alpha=0.7, edgecolor="black")
+        axes[1,0].set_title("Ground Motion Intensity Histogram")
+        axes[1,0].set_xlabel("Sa(1.0s) [g]")
+        axes[1,0].set_ylabel("Frequency")
+
+    # 4. Bridge Class Breakdown (Ax 1,1)
+    class_counts = stats_dict.get("class_breakdown", {})
+    if class_counts:
+        top_classes = sorted(class_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        labels = [c[0] for c in top_classes]
+        sizes = [c[1] for c in top_classes]
+        axes[1,1].pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=plt.cm.Pastel1.colors)
+        axes[1,1].set_title("Top 5 Bridge Classes")
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=120)
     plt.close(fig)
     return path

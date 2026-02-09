@@ -1,20 +1,13 @@
 """
-Bridge Fragility Analysis — Hazus Method, Northridge Case Study
-
-Entry point: downloads data (if needed), generates fragility curves,
-comparison plots, damage distributions, and Northridge scenario analysis.
-Now includes full CAT model pipeline: Hazard -> Exposure -> Vulnerability -> Loss.
+CAT411 — Bridge Earthquake Catastrophe Modeling Framework
+Northridge Case Study & General Risk Assessment
 
 Usage:
-    python main.py                      # Full analysis (requires data files)
-    python main.py --download-hazard    # Download USGS hazard data (ShakeMap + curves)
-    python main.py --download-pipeline  # Download + process via nbi_ingest.py
-    python main.py --fragility-only     # Run fragility analysis without real data
-    python main.py --pipeline           # Deterministic Northridge end-to-end
-    python main.py --probabilistic      # Stochastic event set -> EP curve + AAL
-    python main.py --n-bridges 200      # Synthetic portfolio size
-    python main.py --n-realizations 50  # Monte Carlo realizations
-    python main.py --n-events 50        # Stochastic catalog size
+    python main.py --full-analysis        # Automated end-to-end analysis (Recommended)
+    python main.py --interactive          # Interactive menu-driven interface
+    python main.py --download-hazard      # Download USGS hazard data only
+    python main.py --probabilistic        # Run probabilistic risk analysis
+    python main.py --fragility-only       # Run fragility curve analysis only
 """
 
 import argparse
@@ -36,6 +29,8 @@ from src.plotting import (
     plot_ep_curve,
     plot_portfolio_damage,
     plot_shakemap_grid,
+    plot_bridge_damage_map,
+    plot_analysis_summary,
 )
 from src.northridge_case import (
     NORTHRIDGE_GROUND_MOTION,
@@ -169,18 +164,40 @@ def run_data_analysis():
                 # Visualizations for real data
                 print("\n[Analysis] Generating visualizations for real data...")
                 # 1. Plot full ShakeMap area
-                path_sm = plot_shakemap_grid(sm, output_dir=OUTPUT_DIR, filename="shakemap_full_area.png")
+                path_sm = plot_shakemap_grid(sm, output_dir=OUTPUT_DIR, filename="01_shakemap_full_area.png")
                 print(f"  Saved: {path_sm}")
                 
                 # 2. Plot ground motion at bridge sites
                 from src.exposure import SiteParams
                 bridge_sites = [SiteParams(lat=r["latitude"], lon=r["longitude"]) for _, r in nbi.iterrows()]
-                path_gm = plot_ground_motion_field(bridge_sites, nbi["sa_10"].values, output_dir=OUTPUT_DIR, filename="bridge_site_ground_motion.png")
+                path_gm = plot_ground_motion_field(bridge_sites, nbi["sa_10"].values, output_dir=OUTPUT_DIR, filename="02_bridge_site_ground_motion.png")
                 print(f"  Saved: {path_gm}")
                 
-                # 3. Plot portfolio damage distribution
+                # 3. Plot specific damage map
+                path_dm = plot_bridge_damage_map(nbi, damage_state="complete", output_dir=OUTPUT_DIR, filename="03_bridge_damage_spatial.png")
+                print(f"  Saved: {path_dm}")
+
+                # 4. Portfolio summary stats & Dashboard
                 count_by_ds = {ds: nbi[f"P_{ds}"].mean() * len(nbi) for ds in ["none", "slight", "moderate", "extensive", "complete"]}
-                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="real_portfolio_damage.png")
+                
+                # Simple loss estimate for summary
+                total_loss = nbi["expected_loss"].sum() if "expected_loss" in nbi.columns else 0
+                
+                stats_dict = {
+                    "event_id": "Northridge (ci3144585)",
+                    "total_bridges": len(nbi),
+                    "max_pga": sm["PGA"].max() if "PGA" in sm.columns else 0,
+                    "avg_sa": nbi["sa_10"].mean(),
+                    "total_loss": total_loss,
+                    "damage_distribution": count_by_ds,
+                    "sa_values": nbi["sa_10"].values,
+                    "class_breakdown": nbi["hwb_class"].value_counts().to_dict()
+                }
+                path_dash = plot_analysis_summary(stats_dict, output_dir=OUTPUT_DIR, filename="00_analysis_dashboard.png")
+                print(f"  Saved: {path_dash}")
+                
+                # 5. Plot portfolio damage distribution (legacy style)
+                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="04_portfolio_damage_bars.png")
                 print(f"  Saved: {path_pd}")
                 
         print()
@@ -393,49 +410,83 @@ def run_probabilistic_analysis(
     print("\nProbabilistic analysis complete.")
 
 
+# ── Automated Workflows ──────────────────────────────────────────────────
+
+def run_full_analysis(event_id: str = "ci3144585", overwrite: bool = False):
+    """Run the complete automated end-to-end analysis pipeline."""
+    print("\n" + "="*60)
+    print("  CAT411 — STARTING FULL AUTOMATED ANALYSIS")
+    print("="*60)
+    
+    # 1. Download
+    print("\n[Step 1/3] Downloading USGS Hazard Data...")
+    from src.hazard_download import download_all_hazard_data
+    download_all_hazard_data(event_id=event_id, overwrite=overwrite)
+    
+    # 2. Run Analysis & Generate Maps
+    print("\n[Step 2/3] Processing Data & Computing Risks...")
+    run_data_analysis()
+    
+    # 3. Generate Fragility Library
+    print("\n[Step 3/3] Generating Fragility Curve Library Reference...")
+    run_fragility_analysis()
+    
+    print("\n" + "="*60)
+    print("  ANALYSIS COMPLETE!")
+    print(f"  All results are saved in: {OUTPUT_DIR}")
+    print("="*60 + "\n")
+
+
+def run_interactive_menu():
+    """Display an interactive menu for the user."""
+    while True:
+        print("\n" + "="*60)
+        print("  CAT411 — Bridge Earthquake Catastrophe Modeling")
+        print("="*60)
+        print("\n  Main Menu:\n")
+        print("  [1] 🚀 Run Full Analysis (Download + Analyze + Visualize)")
+        print("  [2] 📥 Download USGS Hazard Data Only")
+        print("  [3] 📊 Generate Fragility Curves Reference")
+        print("  [4] 🎲 Run Stochastic Probabilistic Analysis")
+        print("  [0] 👋 Exit")
+        
+        choice = input("\n  Selection: ").strip()
+        
+        if choice == '1':
+            run_full_analysis()
+        elif choice == '2':
+            from src.hazard_download import download_all_hazard_data
+            evt = input("  Enter USGS Event ID [default: ci3144585]: ").strip() or "ci3144585"
+            download_all_hazard_data(event_id=evt)
+            run_data_analysis()
+        elif choice == '3':
+            run_fragility_analysis()
+        elif choice == '4':
+            n_b = input("  Number of bridges [default: 100]: ").strip() or "100"
+            run_probabilistic_analysis(n_bridges=int(n_b))
+        elif choice == '0':
+            print("\n  Exiting CAT411. Goodbye!")
+            break
+        else:
+            print("\n  [Error] Invalid selection. Please try again.")
+
+
 # ── Main entry point ─────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Bridge Fragility Analysis — Hazus Method, Northridge Case Study"
+        description="CAT411 — Bridge Earthquake Catastrophe Modeling Framework"
     )
+    # Primary modes
     parser.add_argument(
-        "--download-pipeline",
+        "--full-analysis",
         action="store_true",
-        help="Download + process data via broker/utils/nbi_ingest.py",
+        help="Run full automated analysis: Download -> Process -> Analyze -> Visualize",
     )
     parser.add_argument(
-        "--fragility-only",
+        "--interactive",
         action="store_true",
-        help="Run fragility curve analysis only (no real data needed)",
-    )
-    parser.add_argument(
-        "--pipeline",
-        action="store_true",
-        help="Run full deterministic CAT model pipeline (Northridge scenario)",
-    )
-    parser.add_argument(
-        "--probabilistic",
-        action="store_true",
-        help="Run probabilistic analysis with stochastic event catalog",
-    )
-    parser.add_argument(
-        "--n-bridges",
-        type=int,
-        default=100,
-        help="Number of synthetic bridges (default: 100)",
-    )
-    parser.add_argument(
-        "--n-realizations",
-        type=int,
-        default=50,
-        help="Monte Carlo realizations per event (default: 50)",
-    )
-    parser.add_argument(
-        "--n-events",
-        type=int,
-        default=50,
-        help="Number of stochastic events for probabilistic mode (default: 50)",
+        help="Start interactive menu-driven interface",
     )
     parser.add_argument(
         "--download-hazard",
@@ -443,10 +494,40 @@ def main():
         help="Download USGS hazard data (ShakeMap + hazard curves) for Northridge",
     )
     parser.add_argument(
+        "--probabilistic",
+        action="store_true",
+        help="Run probabilistic analysis with stochastic event catalog",
+    )
+    parser.add_argument(
+        "--fragility-only",
+        action="store_true",
+        help="Run fragility curve analysis only (no real data needed)",
+    )
+    
+    # Configuration
+    parser.add_argument(
         "--hazard-event",
         type=str,
         default="ci3144585",
         help="USGS event ID for ShakeMap download (default: ci3144585 = Northridge)",
+    )
+    parser.add_argument(
+        "--n-bridges",
+        type=int,
+        default=100,
+        help="Number of synthetic bridges for pipeline/probabilistic modes",
+    )
+    parser.add_argument(
+        "--n-realizations",
+        type=int,
+        default=50,
+        help="Monte Carlo realizations per event",
+    )
+    parser.add_argument(
+        "--n-events",
+        type=int,
+        default=50,
+        help="Number of stochastic events for probabilistic mode",
     )
     parser.add_argument(
         "--overwrite",
@@ -455,7 +536,14 @@ def main():
     )
     args = parser.parse_args()
 
-    # Handle download-hazard first
+    if args.interactive:
+        run_interactive_menu()
+        return
+
+    if args.full_analysis:
+        run_full_analysis(event_id=args.hazard_event, overwrite=args.overwrite)
+        return
+
     if args.download_hazard:
         from src.hazard_download import download_all_hazard_data
         download_all_hazard_data(
@@ -463,25 +551,10 @@ def main():
             overwrite=args.overwrite,
         )
         print("\n[Pipeline] Hazard data download complete. Running data processing...")
-        # Continue to run data analysis after download
         run_data_analysis()
         return
 
-    if args.download_pipeline:
-        ingest_path = os.path.join(
-            os.path.dirname(__file__), "broker", "utils", "nbi_ingest.py"
-        )
-        cmd = [sys.executable, ingest_path, "--download"]
-        print("[Pipeline] Running:", " ".join(cmd))
-        subprocess.check_call(cmd)
-        return
-
-    if args.pipeline:
-        run_pipeline(
-            n_bridges=args.n_bridges,
-            n_realizations=args.n_realizations,
-        )
-    elif args.probabilistic:
+    if args.probabilistic:
         run_probabilistic_analysis(
             n_bridges=args.n_bridges,
             n_events=args.n_events,
@@ -490,18 +563,16 @@ def main():
     elif args.fragility_only:
         run_fragility_analysis()
     else:
-        # Default: run fragility analysis first
-        run_fragility_analysis()
-
-        # Then load and analyze real data if available
-        from src.data_loader import DATA_DIR
-        if DATA_DIR.exists() and any(DATA_DIR.iterdir()):
-            print("\n")
-            run_data_analysis()
-        else:
-            print("\n[Info] No data files found in data/.")
-            print("  To download: python main.py --download")
-            print("  To run without data: python main.py --fragility-only")
+        # Default: Show help or suggest full analysis
+        print("\n" + "="*60)
+        print("CAT411 — Quick Start")
+        print("="*60)
+        print("To run a full automated analysis (Northridge scenario):")
+        print("  python main.py --full-analysis")
+        print("\nTo start interactive mode:")
+        print("  python main.py --interactive")
+        print("\nFor more options, use --help")
+        print("="*60 + "\n")
 
 
 if __name__ == "__main__":
