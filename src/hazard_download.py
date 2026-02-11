@@ -111,6 +111,23 @@ def _fetch_json(url: str) -> Dict[str, Any]:
             ) from e
 
 
+def _probe_json_endpoint(url: str) -> None:
+    """
+    Pre-flight probe for a JSON API endpoint.
+
+    Raises a RuntimeError when the endpoint does not look like JSON.
+    """
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        content_type = resp.headers.get("Content-Type", "")
+        if "json" not in content_type.lower():
+            preview = resp.read(300).decode("utf-8", errors="replace").replace("\n", " ")
+            raise RuntimeError(
+                f"Endpoint is not returning JSON (content-type={content_type}). "
+                f"Response preview: {preview}"
+            )
+
+
 def _fetch_text(url: str) -> str:
     """Fetch text content from URL."""
     with urllib.request.urlopen(url, timeout=60) as resp:
@@ -354,6 +371,12 @@ def download_hazard_curves(
             data = json.load(f)
     else:
         # Fetch from API
+        print("  Pre-flight endpoint check...")
+        try:
+            _probe_json_endpoint(url)
+        except Exception as e:
+            raise RuntimeError(f"Hazard API pre-flight failed: {e}")
+
         print("  Fetching hazard curves from USGS...")
         try:
             data = _fetch_json(url)
