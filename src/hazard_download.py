@@ -85,9 +85,30 @@ def _ensure_dir(path: Path) -> None:
 
 def _fetch_json(url: str) -> Dict[str, Any]:
     """Fetch JSON from URL and parse."""
-    with urllib.request.urlopen(url, timeout=60) as resp:
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
         data = resp.read()
-        return json.loads(data.decode("utf-8"))
+        content_type = resp.headers.get("Content-Type", "")
+        text = data.decode("utf-8", errors="replace").strip()
+
+        if not text:
+            raise RuntimeError("Empty response body from USGS API")
+
+        # NSHMP endpoints sometimes return HTML/plain text on failures.
+        if "json" not in content_type.lower():
+            preview = text[:300].replace("\n", " ")
+            raise RuntimeError(
+                f"Unexpected content-type '{content_type}' from USGS API. "
+                f"Response preview: {preview}"
+            )
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            preview = text[:300].replace("\n", " ")
+            raise RuntimeError(
+                f"Invalid JSON from USGS API: {e}. Response preview: {preview}"
+            ) from e
 
 
 def _fetch_text(url: str) -> str:
@@ -243,10 +264,23 @@ def download_shakemap(
     _write_log(log_path, log_lines)
     
     print(f"  Downloaded {len(downloaded)} files to {raw_dir}")
+
     return result
 
 
 # ── NSHMP Hazard Curves Download ──────────────────────────────────────────
+
+@dataclass
+class HazardCurveData:
+    """Container for downloaded hazard curve data."""
+    latitude: float
+    longitude: float
+    vs30: int
+    edition: str
+    imt: str
+    curves: pd.DataFrame = field(default_factory=pd.DataFrame)
+    meta: Dict[str, Any] = field(default_factory=dict)
+
 
 def download_hazard_curves(
     latitude: float = NORTHRIDGE_LAT,

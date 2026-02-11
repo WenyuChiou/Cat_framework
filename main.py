@@ -30,6 +30,7 @@ from src.plotting import (
     plot_portfolio_damage,
     plot_shakemap_grid,
     plot_bridge_damage_map,
+    plot_nbi_bridge_distribution_map,
     plot_analysis_summary,
 )
 from src.northridge_case import (
@@ -167,17 +168,25 @@ def run_data_analysis():
                 path_sm = plot_shakemap_grid(sm, output_dir=OUTPUT_DIR, filename="01_shakemap_full_area.png")
                 print(f"  Saved: {path_sm}")
                 
-                # 2. Plot ground motion at bridge sites
+                # 2. Plot NBI bridge distribution map
+                path_nbi = plot_nbi_bridge_distribution_map(
+                    nbi,
+                    output_dir=OUTPUT_DIR,
+                    filename="02_nbi_bridge_distribution_map.png",
+                )
+                print(f"  Saved: {path_nbi}")
+
+                # 3. Plot ground motion at bridge sites
                 from src.exposure import SiteParams
                 bridge_sites = [SiteParams(lat=r["latitude"], lon=r["longitude"]) for _, r in nbi.iterrows()]
-                path_gm = plot_ground_motion_field(bridge_sites, nbi["sa_10"].values, output_dir=OUTPUT_DIR, filename="02_bridge_site_ground_motion.png")
+                path_gm = plot_ground_motion_field(bridge_sites, nbi["sa_10"].values, output_dir=OUTPUT_DIR, filename="03_bridge_site_ground_motion.png")
                 print(f"  Saved: {path_gm}")
                 
-                # 3. Plot specific damage map
-                path_dm = plot_bridge_damage_map(nbi, damage_state="complete", output_dir=OUTPUT_DIR, filename="03_bridge_damage_spatial.png")
+                # 4. Plot specific damage map
+                path_dm = plot_bridge_damage_map(nbi, damage_state="complete", output_dir=OUTPUT_DIR, filename="04_bridge_damage_spatial.png")
                 print(f"  Saved: {path_dm}")
 
-                # 4. Portfolio summary stats & Dashboard
+                # 5. Portfolio summary stats & Dashboard
                 count_by_ds = {ds: nbi[f"P_{ds}"].mean() * len(nbi) for ds in ["none", "slight", "moderate", "extensive", "complete"]}
                 
                 # Simple loss estimate for summary
@@ -196,8 +205,8 @@ def run_data_analysis():
                 path_dash = plot_analysis_summary(stats_dict, output_dir=OUTPUT_DIR, filename="00_analysis_dashboard.png")
                 print(f"  Saved: {path_dash}")
                 
-                # 5. Plot portfolio damage distribution (legacy style)
-                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="04_portfolio_damage_bars.png")
+                # 6. Plot portfolio damage distribution (legacy style)
+                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="05_portfolio_damage_bars.png")
                 print(f"  Saved: {path_pd}")
                 
         print()

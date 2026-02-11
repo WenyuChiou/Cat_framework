@@ -611,6 +611,37 @@ def plot_bridge_damage_map(
     return path
 
 
+def plot_nbi_bridge_distribution_map(
+    nbi_df: pd.DataFrame,
+    output_dir: str = "output",
+    filename: str = "nbi_bridge_distribution_map.png",
+) -> str:
+    """
+    Plot NBI bridge locations as a spatial distribution map.
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.scatter(
+        nbi_df["longitude"],
+        nbi_df["latitude"],
+        s=8,
+        c="#1f77b4",
+        alpha=0.55,
+        edgecolors="none",
+    )
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title("NBI Bridge Spatial Distribution", fontsize=13, fontweight="bold")
+    ax.grid(True, alpha=0.25)
+    ax.set_aspect("equal", adjustable="box")
+    fig.tight_layout()
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def plot_analysis_summary(
     stats_dict: dict,
     output_dir: str = "output",

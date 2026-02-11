@@ -154,6 +154,38 @@ python main.py --probabilistic --n-bridges 200 --n-events 100 --n-realizations 3
 python main.py --download-hazard --hazard-event ci3144585
 ```
 
+### Function Parameter Reference
+
+`download_hazard_curves(latitude, longitude, vs30, edition, imt, output_dir, overwrite)`
+
+- `latitude`, `longitude`: site coordinates in decimal degrees (Northridge default `34.213, -118.537`)
+- `vs30`: average shear-wave velocity in top 30m, unit `m/s`
+- `edition`: NSHMP model edition string, default `E2014`
+- `imt`: intensity measure type, common values: `PGA`, `SA0P2`, `SA1P0`
+- `output_dir`: output folder for raw/processed/meta/log files
+- `overwrite`: whether to re-download files that already exist
+
+`download_shakemap(event_id, output_dir, files, overwrite)`
+
+- `event_id`: USGS event id (Northridge: `ci3144585`)
+- `files`: usually `grid.xml`, `info.json`, `shape.zip`
+- `overwrite`: whether to replace existing downloads
+
+`plot_shakemap_grid(shakemap_df, intensity_measure, output_dir, filename)`
+
+- `intensity_measure`: column to color by, usually `PSA10` or `PGA`
+- `filename`: output image name
+
+`plot_bridge_damage_map(nbi_df, damage_state, output_dir, filename)`
+
+- `damage_state`: one of `none`, `slight`, `moderate`, `extensive`, `complete`
+- if `P_<damage_state>` is missing, function falls back to `sa_10`
+
+`plot_nbi_bridge_distribution_map(nbi_df, output_dir, filename)`
+
+- plots bridge point distribution from `latitude`/`longitude`
+- useful for QA after loading/filtering NBI
+
 ---
 
 ## Mathematical Foundations
