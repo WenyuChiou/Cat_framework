@@ -10,15 +10,17 @@ The framework implements the four core components of a catastrophe model — **H
 
 - [Pipeline Architecture](#pipeline-architecture)
 - [Quick Start](#quick-start)
+- [Configuration System](#configuration-system)
+- [Data Sources](#data-sources)
 - [Mathematical Foundations](#mathematical-foundations)
   - [Hazard: Ground Motion Prediction](#1-hazard-ground-motion-prediction-srchazardpy)
   - [Exposure: Bridge Inventory](#2-exposure-bridge-inventory--financial-data-srcexposurepy)
   - [Vulnerability: Fragility Curves](#3-vulnerability-fragility-curves-srcfragilitypy)
   - [Loss: Damage-to-Loss Translation](#4-loss-damage-to-loss-translation-srclosspy)
+- [Spatial Interpolation Methods](#spatial-interpolation-methods)
 - [Pipeline Orchestrator](#5-pipeline-orchestrator-srcenginepy)
-- [Supporting Modules](#supporting-modules)
-- [Output Artifacts](#output-artifacts)
-- [Data Sources](#data-sources)
+- [Module Reference](#module-reference)
+- [Output Structure](#output-structure)
 - [API Usage Examples](#api-usage-examples)
 - [References](#references)
 
@@ -27,40 +29,32 @@ The framework implements the four core components of a catastrophe model — **H
 ## Pipeline Architecture
 
 ```
-EarthquakeScenario (Mw, lat, lon, depth, fault_type)
-        |
-        v
-   src/hazard.py
-   |  GMPE: Boore-Atkinson 2008 -> median Sa(1.0s) + sigma
-   |  Site amplification: Vs30-dependent F_S term
-   |  Spatial correlation: Jayaram-Baker 2009 (rho = exp(-3h/b))
-   |  Ground motion field: Cholesky(corr) x N(0,1) x sigma
-   |
-   +------------------------------+
-   v                              v
- src/exposure.py            src/fragility.py
- Bridge inventory           P[DS >= ds | Sa] = Phi[(lnSa - ln_median) / beta]
- BridgeExposure dataclass   14 Hazus bridge classes (HWB1-HWB28)
- Replacement cost = f(material, deck_area)   Damage states: none/slight/moderate/
- Synthetic portfolio generator               extensive/complete
- NBI-to-exposure converter
-   |                              |
-   +--------------+---------------+
+                    config.yaml
+                        │
+               ┌────────┴────────┐
+               v                 v
+    IM Source: ShakeMap      IM Source: GMPE
+    (grid.xml via USGS)     (BA08 calculation)
+               │                 │
+               v                 v
+       ┌── Spatial Interpolation ──┐
+       │  nearest / idw / bilinear │
+       │  natural_neighbor / kriging│
+       └──────────┬───────────────┘
+                  │
                   v
-            src/loss.py
-            E[Loss_i] = SUM_ds P(ds) x DR(ds) x RC_i
-            DR: none=0%, slight=3%, moderate=8%, extensive=25%, complete=100%
-            EP(L) = 1 - exp(-cumulative_rate)
-            AAL = SUM_i lambda_i x L_i
-                  |
+           Bridge IM values
+           (PGA / SA03 / SA10 / SA30)
+                  │
+    ┌─────────────┼─────────────┐
+    v             v             v
+ Exposure     Fragility      Loss
+ (NBI data)   P[DS≥ds|IM]    E[Loss] = ΣP(ds)·DR·RC
+              Hazus 6.1      EP curve + AAL
+                  │
                   v
-           src/engine.py
-           Deterministic: 1 scenario x N realizations -> mean/std loss
-           Probabilistic: GR catalog x N realizations -> EP curve + AAL
-                  |
-                  v
-             main.py (CLI)
-             --pipeline / --probabilistic / --fragility-only
+          Visualizations
+          (8 analysis plots)
 ```
 
 ---
@@ -71,120 +65,133 @@ EarthquakeScenario (Mw, lat, lon, depth, fault_type)
 
 ```bash
 pip install -r requirements.txt
-# Requires: numpy, scipy, matplotlib, pandas, requests
+# Requires: numpy, scipy, matplotlib, pandas, requests, pyyaml
 ```
 
 ### Run modes
 
 ```bash
-# 1. Full deterministic CAT model pipeline (Northridge Mw 6.7 scenario)
+# 1. Default: download data + full analysis with config.yaml
+python main.py
+
+# 2. Full deterministic CAT model pipeline (synthetic portfolio)
 python main.py --pipeline
 
-# 2. Probabilistic analysis: stochastic event catalog -> EP curve + AAL
+# 3. Probabilistic analysis: stochastic catalog → EP curve + AAL
 python main.py --probabilistic
 
-# 3. Fragility curves only (no hazard/loss, existing analysis)
+# 4. Fragility curves only
 python main.py --fragility-only
 
-# 4. Download USGS hazard data (ShakeMap + auto-processing)
+# 5. Download USGS data only
 python main.py --download-hazard
 
-# 5. Download + process via legacy pipeline (NBI + ShakeMap)
-python main.py --download-pipeline
-
-# 6. Run full data analysis after download
-python main.py
+# 6. With configuration overrides
+python main.py --config config.yaml --im-type PGA --nbi-filter "county=037" "year_built>1960"
 ```
 
-### Full usage (download + run)
+### CLI flags
+
+| Flag                | Default       | Description                                               |
+| ------------------- | ------------- | --------------------------------------------------------- |
+| `--config`          | `config.yaml` | Path to YAML configuration file                           |
+| `--im-type`         | `SA10`        | Override IM type: `PGA`, `SA03`, `SA10`, `SA30`           |
+| `--nbi-filter`      | —             | NBI column filters (e.g. `county=037`, `year_built>1960`) |
+| `--pipeline`        | —             | Run deterministic CAT model (synthetic portfolio)         |
+| `--probabilistic`   | —             | Run probabilistic analysis with event catalog             |
+| `--fragility-only`  | —             | Generate fragility curves only                            |
+| `--download-hazard` | —             | Download USGS ShakeMap data                               |
+| `--n-bridges`       | 100           | Synthetic portfolio size                                  |
+| `--n-realizations`  | 50            | Monte Carlo realizations per event                        |
+| `--n-events`        | 50            | Stochastic events (probabilistic mode)                    |
+
+---
+
+## Configuration System
+
+All analysis parameters are controlled via `config.yaml`:
+
+```yaml
+# ── IM Source ──────────────────────────────────
+im_source: shakemap # "shakemap" or "gmpe"
+im_type: SA10 # PGA, SA03, SA10, SA30
+
+# ── Spatial Interpolation ─────────────────────
+interpolation:
+  method: nearest # nearest / idw / bilinear / natural_neighbor / kriging
+
+# ── Region ────────────────────────────────────
+region:
+  lat_min: 33.8
+  lat_max: 34.6
+  lon_min: -118.9
+  lon_max: -118.0
+
+# ── Bridge Selection (any NBI column) ─────────
+bridge_selection:
+  county: "037" # exact match
+  year_built: ">1960" # numeric comparison
+  material: ["concrete"] # list match
+
+# ── Fragility Overrides ───────────────────────
+fragility_overrides:
+  HWB5:
+    slight: { median: 0.30, beta: 0.55 }
+    moderate: { median: 0.50, beta: 0.55 }
+    extensive: { median: 0.70, beta: 0.55 }
+    complete: { median: 1.00, beta: 0.55 }
+
+# ── Calibration ───────────────────────────────
+calibration:
+  global_median_factor: 1.0
+  class_factors:
+    HWB5: 0.90 # 10% more vulnerable
+```
+
+CLI arguments (`--im-type`, `--nbi-filter`) override `config.yaml` settings.
+
+---
+
+## Data Sources
+
+The framework integrates **3 data sources**:
+
+| Source            | File                    | Format        | Contents                                                                                |
+| ----------------- | ----------------------- | ------------- | --------------------------------------------------------------------------------------- |
+| **FHWA NBI**      | `data/CA24.txt`         | Delimited TXT | Bridge inventory — ~12,000 CA bridges with location, material, year, spans, condition   |
+| **USGS ShakeMap** | `data/grid.xml`         | XML grid      | Ground motion intensities — PGA, PGV, PSA03, PSA10, PSA30, SVEL on regular lat/lon grid |
+| **Station List**  | `data/stationlist.json` | JSON          | Real seismic station recordings for the event (used for ShakeMap validation)            |
+
+### Data directory layout
+
+```
+data/
+├── CA24.txt                    ← NBI raw file (top-level for quick access)
+├── grid.xml                    ← ShakeMap grid (top-level for quick access)
+├── stationlist.json            ← Station recordings
+├── nbi/
+│   ├── raw/                    ← Downloaded NBI zip + extracted files
+│   ├── clean/                  ← Cleaned NBI CSV
+│   ├── curated/                ← Curated NBI CSV (filtered, classified)
+│   ├── meta/                   ← Processing metadata JSON
+│   └── logs/                   ← Processing log files
+└── hazard/usgs/
+    ├── shakemap/               ← ShakeMap raw + processed files
+    └── hazard_curves/          ← NSHMP probabilistic hazard curves
+```
+
+### Download commands
 
 ```bash
-# A) Download data only (NBI + ShakeMap)
-python broker/utils/nbi_ingest.py --download --download-only
+# Full download + processing pipeline
+python main.py --download-pipeline
 
-# B) Download and process (clean + curated outputs)
+# Or manual NBI download
 python broker/utils/nbi_ingest.py --download
 
-# C) Run the main analysis after data is ready
-python main.py
-
-# C2) Download + process via main.py (pipeline)
-python main.py --download-pipeline
-
-# D) Deterministic or probabilistic modes
-python main.py --pipeline
-python main.py --probabilistic
-
-# E) Override download year or event if needed
-python broker/utils/nbi_ingest.py --download --nbi-year 1994 --usgs-event ci3144585
-```
-
-### Expected outputs (from the pipeline)
-
-NBI:
-
-- `data/nbi/raw/` (zip + extracted TXT/CSV)
-- `data/nbi/clean/nbi_latest_clean.csv`
-- `data/nbi/curated/nbi_latest_curated.csv`
-- `data/nbi/meta/nbi_latest_meta.json`
-- `data/nbi/logs/nbi_latest_run.log`
-
-ShakeMap:
-
-- `data/hazard/usgs/shakemap/raw/grid.xml`
-- `data/hazard/usgs/shakemap/raw/shape.zip`
-- `data/hazard/usgs/shakemap/raw/info.json`
-- `data/hazard/usgs/shakemap/meta/`
-- `data/hazard/usgs/shakemap/logs/`
-
-### Configuration flags
-
-| Flag                | Default   | Description                                                 |
-| ------------------- | --------- | ----------------------------------------------------------- |
-| `--n-bridges`       | 100       | Number of bridges in synthetic portfolio                    |
-| `--n-realizations`  | 50        | Monte Carlo ground motion field realizations                |
-| `--n-events`        | 50        | Number of stochastic earthquake events (probabilistic mode) |
-| `--download-hazard` | -         | Download USGS ShakeMap for Northridge event                 |
-| `--hazard-event`    | ci3144585 | USGS event ID to download (default: Northridge)             |
-| `--overwrite`       | false     | Overwrite existing downloaded files                         |
-
-```bash
-python main.py --pipeline --n-bridges 200 --n-realizations 100
-python main.py --probabilistic --n-bridges 200 --n-events 100 --n-realizations 30
+# Download ShakeMap for a specific event
 python main.py --download-hazard --hazard-event ci3144585
 ```
-
-### Function Parameter Reference
-
-`download_hazard_curves(latitude, longitude, vs30, edition, imt, output_dir, overwrite)`
-
-- `latitude`, `longitude`: site coordinates in decimal degrees (Northridge default `34.213, -118.537`)
-- `vs30`: average shear-wave velocity in top 30m, unit `m/s`
-- `edition`: NSHMP model edition string, default `E2014`
-- `imt`: intensity measure type, common values: `PGA`, `SA0P2`, `SA1P0`
-- `output_dir`: output folder for raw/processed/meta/log files
-- `overwrite`: whether to re-download files that already exist
-
-`download_shakemap(event_id, output_dir, files, overwrite)`
-
-- `event_id`: USGS event id (Northridge: `ci3144585`)
-- `files`: usually `grid.xml`, `info.json`, `shape.zip`
-- `overwrite`: whether to replace existing downloads
-
-`plot_shakemap_grid(shakemap_df, intensity_measure, output_dir, filename)`
-
-- `intensity_measure`: column to color by, usually `PSA10` or `PGA`
-- `filename`: output image name
-
-`plot_bridge_damage_map(nbi_df, damage_state, output_dir, filename)`
-
-- `damage_state`: one of `none`, `slight`, `moderate`, `extensive`, `complete`
-- if `P_<damage_state>` is missing, function falls back to `sa_10`
-
-`plot_nbi_bridge_distribution_map(nbi_df, output_dir, filename)`
-
-- plots bridge point distribution from `latitude`/`longitude`
-- useful for QA after loading/filtering NBI
 
 ---
 
@@ -194,208 +201,97 @@ python main.py --download-hazard --hazard-event ci3144585
 
 #### Boore & Atkinson (2008) GMPE
 
-The ground motion prediction equation computes the median spectral acceleration Sa(1.0s) in g as:
-
 ```
 ln(Sa) = F_M + F_D + F_S
 ```
 
-where:
+- **F_M** (source/magnitude): Uses hinge magnitude M_h = 6.75 with fault-type-dependent coefficients
+- **F_D** (distance): `R = sqrt(R_JB² + h²)` with h = 2.54 km fictitious depth
+- **F_S** (site): `F_lin = b_lin · ln(min(Vs30, V_ref) / V_ref)` with non-linear correction
 
-**Source (magnitude) term F_M:**
-
-- For M <= M_h (hinge magnitude = 6.75):
-  `F_M = e_i + e5*(M - M_h) + e6*(M - M_h)^2`
-- For M > M_h:
-  `F_M = e_i + e7*(M - M_h)`
-- Coefficient e_i depends on fault mechanism:
-  - e1 = -0.23898 (unspecified)
-  - e2 = -0.28892 (strike-slip)
-  - e4 = -0.20608 (reverse)
-
-**Distance term F_D:**
-
-```
-R = sqrt(R_JB^2 + h^2)    where h = 2.54 km (fictitious depth)
-F_D = (c1 + c2*(M - M_h)) * ln(R) + c3*(R - 1)
-```
-
-- c1 = -0.68898, c2 = 0.21521, c3 = -0.00707
-- R_JB is the Joyner-Boore distance (km), approximated as epicentral distance for point sources
-
-**Site amplification term F_S:**
-
-```
-F_lin = b_lin * ln(min(Vs30, V_ref) / V_ref)
-```
-
-- b_lin = -0.60, V_ref = 760 m/s
-- Non-linear correction applied for Vs30 < 300 m/s using PGA on reference rock
-
-**Aleatory uncertainty:**
-
-- Inter-event: tau = 0.255
-- Intra-event: sigma = 0.502
-- Total: sigma_T = 0.564
+**Aleatory uncertainty:** σ_total = 0.564 (inter-event τ = 0.255, intra-event σ = 0.502)
 
 #### Jayaram-Baker (2009) Spatial Correlation
 
-The intra-event residuals at nearby sites are spatially correlated:
-
 ```
-rho(h) = exp(-3h / b)
+ρ(h) = exp(-3h / b),    b = 40.7 km for T = 1.0s
 ```
-
-where h is the inter-site separation distance (km) and b = 40.7 km for T = 1.0s.
-
-The correlation matrix C_ij = rho(h_ij) is constructed for all site pairs.
-
-#### Ground Motion Field Generation
-
-For each realization k:
-
-1. Draw inter-event residual: eta_k ~ N(0, tau) (shared by all sites)
-2. Draw correlated intra-event residuals: eps = L _ z _ sigma
-   - L = Cholesky decomposition of C (correlation matrix)
-   - z ~ N(0, I) (independent standard normals)
-3. Combine: `ln(Sa_i) = ln(median_i) + eta + eps_i`
-4. Exponentiate: `Sa_i = exp(ln(Sa_i))`
 
 ### 2. Exposure: Bridge Inventory & Financial Data (`src/exposure.py`)
 
-#### BridgeExposure Dataclass
-
-Each bridge carries:
-| Field | Type | Description |
-|-------|------|-------------|
-| `bridge_id` | str | Unique identifier |
-| `lat`, `lon` | float | Geographic coordinates |
-| `hwb_class` | str | Hazus bridge class (e.g. "HWB5") |
-| `material` | str | "concrete", "steel", "prestressed_concrete", "wood", "other" |
-| `length` | float | Total length (m) |
-| `deck_area` | float | Deck area (m^2) |
-| `replacement_cost` | float | Estimated replacement cost (USD) |
-| `vs30` | float | Site Vs30 (m/s) |
-| `skew_angle` | float | Skew angle (degrees) |
-
-#### Replacement Cost Estimation
+#### Replacement Cost
 
 ```
-RC = unit_cost(material) x deck_area x length_factor
+RC = unit_cost(material) × deck_area × length_factor
 ```
 
-Unit costs by material (USD/m^2):
-| Material | Unit Cost |
-|----------|-----------|
-| Concrete | $2,500 |
-| Steel | $3,200 |
-| Prestressed concrete | $2,800 |
-| Wood | $1,800 |
-| Other | $2,600 |
-
-Length adjustment factor: `1.0 + 0.15 * max(0, (length - 100) / 200)` accounts for higher foundation costs on longer bridges.
-
-#### Synthetic Portfolio Generation
-
-`generate_synthetic_portfolio(n_bridges, center, radius_km, seed)` creates a portfolio with:
-
-- Realistic Northridge-area HWB class distribution (e.g. HWB5: 14%, HWB3: 12%, HWB17: 10%)
-- Uniform random placement within a disc around the center
-- Random structural dimensions (length 15-120m, width 8-25m)
-- Random Vs30 (200-800 m/s)
+| Material             | Unit Cost (USD/m²) |
+| -------------------- | ------------------ |
+| Concrete             | $2,500             |
+| Steel                | $3,200             |
+| Prestressed concrete | $2,800             |
+| Wood                 | $1,800             |
 
 ### 3. Vulnerability: Fragility Curves (`src/fragility.py`)
 
 #### Lognormal Fragility Model
 
-The probability of reaching or exceeding damage state `ds` given intensity measure `Sa`:
-
 ```
-P[DS >= ds | Sa] = Phi( (ln(Sa) - ln(median_ds)) / beta_ds )
+P[DS ≥ ds | IM] = Φ( (ln(IM) - ln(median_ds)) / β_ds )
 ```
 
-where Phi is the standard normal CDF, and (median_ds, beta_ds) are lognormal parameters from **Hazus Table 7.9**.
-
-#### 14 Bridge Classes
-
-Parameters are defined for 14 Hazus bridge classes in `src/hazus_params.py`. Example (HWB5 — Multi-Span Concrete Continuous, Conventional):
-
-| Damage State | Median (g) | Beta |
-| :----------- | :--------: | :--: |
-| Slight       |    0.35    | 0.6  |
-| Moderate     |    0.45    | 0.6  |
-| Extensive    |    0.55    | 0.6  |
-| Complete     |    0.80    | 0.6  |
-
-Seismic-designed bridges (even-numbered HWBs) have 1.5-2x higher median capacities.
+Parameters from **Hazus Table 7.9** for 14 bridge classes (HWB1–HWB28).
 
 #### Discrete Damage State Probabilities
 
-From the exceedance curves, discrete probabilities are computed:
-
 ```
-P[none]      = 1 - P[DS >= slight]
-P[slight]    = P[DS >= slight]    - P[DS >= moderate]
-P[moderate]  = P[DS >= moderate]  - P[DS >= extensive]
-P[extensive] = P[DS >= extensive] - P[DS >= complete]
-P[complete]  = P[DS >= complete]
-```
-
-These five probabilities sum to 1.0 for any given Sa value.
-
-#### Skew Modification
-
-For skewed bridges, the median capacity is reduced:
-
-```
-median_modified = median * sqrt(1 - (skew_angle / 90)^2)
+P[none]     = 1 - P[DS ≥ slight]
+P[slight]   = P[DS ≥ slight]   - P[DS ≥ moderate]
+P[moderate] = P[DS ≥ moderate] - P[DS ≥ extensive]
+P[extensive]= P[DS ≥ extensive] - P[DS ≥ complete]
+P[complete] = P[DS ≥ complete]
 ```
 
 ### 4. Loss: Damage-to-Loss Translation (`src/loss.py`)
 
 #### Hazus Damage Ratios (Table 7.11)
 
-| Damage State | Damage Ratio (DR) | Downtime (days) |
-| :----------- | :---------------: | :-------------: |
-| None         |       0.00        |        0        |
-| Slight       |       0.03        |       0.6       |
-| Moderate     |       0.08        |       2.5       |
-| Extensive    |       0.25        |       75        |
-| Complete     |       1.00        |       230       |
-
-#### Expected Loss per Bridge
+| Damage State | Damage Ratio | Downtime (days) |
+| :----------- | :----------: | :-------------: |
+| None         |     0.00     |        0        |
+| Slight       |     0.03     |       0.6       |
+| Moderate     |     0.08     |       2.5       |
+| Extensive    |     0.25     |       75        |
+| Complete     |     1.00     |       230       |
 
 ```
-E[Loss_i] = SUM_ds  P(ds | Sa_i) x DR(ds) x RC_i
+E[Loss_i] = Σ_ds P(ds | IM_i) × DR(ds) × RC_i
 ```
 
-where P(ds | Sa_i) is the discrete damage state probability at the site-specific Sa, and RC_i is the replacement cost.
+---
 
-#### Portfolio Aggregation
+## Spatial Interpolation Methods
 
-Total expected loss:
+The `src/interpolation.py` module provides **5 methods** for assigning IM values from ShakeMap grid to bridge locations:
 
+| Method                         | Config Name        | Description                           | Best For                     |
+| ------------------------------ | ------------------ | ------------------------------------- | ---------------------------- |
+| **Nearest Neighbor**           | `nearest`          | KD-tree closest grid point            | Dense grids, fast processing |
+| **Inverse Distance Weighting** | `idw`              | Weighted avg of k-nearest points      | Smooth fields, configurable  |
+| **Bilinear**                   | `bilinear`         | RegularGridInterpolator               | Regular ShakeMap grids       |
+| **Natural Neighbor**           | `natural_neighbor` | Voronoi/Delaunay triangulation        | Irregular station data       |
+| **Ordinary Kriging**           | `kriging`          | Exponential variogram (Jayaram-Baker) | Geostatistical accuracy      |
+
+Configure in `config.yaml`:
+
+```yaml
+interpolation:
+  method: idw
+  power: 2.0 # IDW: distance exponent
+  n_neighbors: 8 # IDW/Kriging: neighbor count
+  range_km: 50.0 # Kriging: variogram range
+  nugget: 0.01 # Kriging: measurement noise
 ```
-E[L_portfolio] = SUM_i  E[Loss_i]
-Loss_ratio = E[L_portfolio] / SUM_i RC_i
-```
-
-#### Loss Exceedance Probability (EP) Curve
-
-For a set of scenarios with annual rates lambda_i and losses L_i:
-
-1. Sort scenarios by loss (descending)
-2. Cumulative rate: nu(L) = SUM\_{L_i >= L} lambda_i
-3. Annual exceedance probability (Poisson): EP(L) = 1 - exp(-nu(L))
-4. Return period: RP(L) = 1 / nu(L)
-
-#### Average Annual Loss (AAL)
-
-```
-AAL = SUM_i  lambda_i x L_i
-```
-
-where lambda_i is the annual rate of scenario i and L_i is the expected loss.
 
 ---
 
@@ -403,159 +299,97 @@ where lambda_i is the annual rate of scenario i and L_i is the expected loss.
 
 ### Deterministic Mode
 
-`run_deterministic(scenario, portfolio, n_realizations)`:
-
-1. Compute median Sa(1.0s) at each bridge site via BA08
-2. Generate N spatially-correlated ground motion fields (Cholesky + MVN)
-3. For each realization: compute portfolio loss via fragility + damage ratios
-4. Report mean, std, and loss distribution across realizations
+1. Compute median Sa(1.0s) at each site via BA08
+2. Generate N spatially-correlated ground motion fields
+3. Compute portfolio loss for each realization
+4. Report mean, std, and loss distribution
 
 ### Probabilistic Mode
 
-`run_probabilistic(portfolio, n_events, n_realizations)`:
-
-1. Generate stochastic event catalog from Gutenberg-Richter: `log10(N) = a - b*M`
-   - Default: a=4.0, b=1.0, M_range=[5.0, 7.5]
-   - Random locations within 80 km radius of Northridge
-   - Truncated exponential magnitude sampling
-2. For each event: generate N ground motion fields, compute mean loss
+1. Generate stochastic event catalog from Gutenberg-Richter
+2. For each event: compute mean loss across realizations
 3. Build EP curve from (loss, rate) pairs
-4. Compute AAL
-
-### Pre-defined Scenario
-
-```python
-NORTHRIDGE_SCENARIO = EarthquakeScenario(
-    Mw=6.7, lat=34.213, lon=-118.537, depth_km=18.4, fault_type="reverse"
-)
-```
+4. Compute Average Annual Loss (AAL)
 
 ---
 
-## Supporting Modules
+## Module Reference
 
-| Module                   | Purpose                                                                                                          |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `src/hazus_params.py`    | Hazus 6.1 Table 7.9 lognormal fragility parameters for 14 bridge classes                                         |
-| `src/bridge_classes.py`  | `BridgeClassification` dataclass and `classify_bridge()` decision tree                                           |
-| `src/data_loader.py`     | Parse local USGS ShakeMap (grid.xml), station recordings (JSON), and FHWA NBI bridge inventory (delimited text)  |
-| `src/northridge_case.py` | 1994 Northridge observed damage statistics (1,600 bridges, 7 collapses) and prediction-vs-observation comparison |
-| `src/plotting.py`        | All visualization: fragility curves, ground motion map, loss bar chart, damage distribution, EP curve            |
-
----
-
-## Output Artifacts
-
-All plots are saved to `output/` and can be regenerated at any time.
-
-| File                        | CLI Mode           | Description                                                                     |
-| --------------------------- | ------------------ | ------------------------------------------------------------------------------- |
-| `ground_motion_field.png`   | `--pipeline`       | Scatter map of Sa(1.0s) at bridge sites, colored by intensity, epicenter marked |
-| `loss_by_class.png`         | `--pipeline`       | Bar chart: expected loss per HWB class                                          |
-| `portfolio_damage.png`      | `--pipeline`       | Stacked horizontal bar: portfolio damage state distribution                     |
-| `ep_curve.png`              | `--probabilistic`  | Loss EP curve (left) and loss vs return period (right)                          |
-| `fragility_HWB*.png`        | `--fragility-only` | 4-curve fragility plot per class (14 files)                                     |
-| `comparison_*.png`          | `--fragility-only` | Cross-class comparison for slight and complete damage                           |
-| `damage_distribution_*.png` | `--fragility-only` | Stacked bar charts at 10 intensity levels                                       |
-| `northridge_scenario.png`   | `--fragility-only` | HWB5 fragility with observed PGA range overlay                                  |
-| `bridge_damage_results.csv` | default            | Per-bridge damage probabilities (requires real data)                            |
+| Module                   | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `src/hazard.py`          | BA08 GMPE, spatial correlation, ground motion field generation |
+| `src/exposure.py`        | Bridge portfolio, replacement cost, NBI-to-exposure conversion |
+| `src/fragility.py`       | Lognormal fragility model, damage state probabilities          |
+| `src/loss.py`            | Damage ratios, expected loss, EP curve, AAL                    |
+| `src/engine.py`          | Pipeline orchestrator (deterministic + probabilistic)          |
+| `src/config.py`          | Configuration loader (`config.yaml` → `AnalysisConfig`)        |
+| `src/interpolation.py`   | 5 spatial interpolation methods for IM assignment              |
+| `src/data_loader.py`     | Parse ShakeMap XML, station JSON, NBI text files               |
+| `src/hazard_download.py` | USGS API download (ShakeMap, hazard curves, design maps)       |
+| `src/hazus_params.py`    | Hazus 6.1 Table 7.9 fragility parameters (14 classes)          |
+| `src/bridge_classes.py`  | NBI → Hazus bridge classification decision tree                |
+| `src/northridge_case.py` | 1994 Northridge observed damage statistics                     |
+| `src/plotting.py`        | All visualization functions (17 plot types)                    |
 
 ---
 
-## Data Sources & Integration
+## Output Structure
 
-### Overview
+All outputs are organized into subdirectories:
 
-This project integrates two data sources:
-
-- **USGS ShakeMap** for ground motion intensity (grid.xml, shape.zip, info.json)
-- **FHWA NBI** for bridge inventory (delimited TXT/CSV)
-
-### Recommended download method (reproducible)
-
-```bash
-python main.py --download-pipeline
+```
+output/
+├── analysis/                              ← Real data analysis results
+│   ├── 00_analysis_dashboard.png          2×2 summary dashboard
+│   ├── 01_shakemap_full_area.png          ShakeMap intensity grid
+│   ├── 02_nbi_bridge_distribution_map.png Bridge locations
+│   ├── 03_bridge_site_ground_motion.png   IM at bridge sites
+│   ├── 04_bridge_damage_spatial.png       Damage probability map
+│   ├── 05_bridges_on_shakemap.png         Bridges overlaid on ShakeMap contours
+│   ├── 06_attenuation_curve.png           GMPE prediction vs observed IM
+│   ├── 07_portfolio_damage_bars.png       Damage state distribution
+│   └── bridge_damage_results.csv          Per-bridge damage probabilities
+│
+├── fragility/                             ← Fragility curve plots
+│   ├── fragility_HWB*.png                 Individual class curves (14 files)
+│   ├── comparison_*.png                   Cross-class comparisons
+│   └── damage_distribution_HWB*.png       Damage probability distributions
+│
+└── scenario/                              ← Scenario-based analysis
+    ├── northridge_scenario.png            Northridge PGA overlay
+    ├── ground_motion_field.png            Synthetic GMF
+    ├── loss_by_class.png                  Loss by bridge class
+    ├── portfolio_damage.png               Portfolio damage summary
+    └── ep_curve.png                       Exceedance probability curve
 ```
 
-### Load and analyze (after download)
-
-```bash
-python main.py
-```
-
-### Local parsing (Python)
-
-```python
-from src.data_loader import load_shakemap, load_stations, load_nbi, classify_nbi_to_hazus
-
-shakemap = load_shakemap("data/grid.xml")
-stations = load_stations("data/stationlist.json")
-nbi = load_nbi("data/CA24.txt")
-nbi = classify_nbi_to_hazus(nbi)
-```
-
-### Notes
-
-- Downloads are large and should not be committed.
-
-### Verify outputs
-
-```bash
-# Check NBI outputs
-ls data/nbi/clean
-ls data/nbi/curated
-ls data/nbi/logs
-
-# Check ShakeMap outputs
-ls data/hazard/usgs/shakemap/raw
-ls data/hazard/usgs/shakemap/logs
-```
-
-### Common issues
-
-- `BadZipFile` or HTML downloaded instead of zip: FHWA link changed. Re-run `python main.py --download-pipeline` later, or update the resolver in `broker/utils/nbi_ingest.py`.
-- Many `ParserWarning` lines: NBI delimited text has malformed rows. The pipeline skips those lines to finish. Check `data/nbi/logs/nbi_latest_run.log`.
-- ShakeMap files missing: the event product may not include all files. Check `data/hazard/usgs/shakemap/logs/shakemap_ci3144585_run.log`.
-
-- If you already ran `broker/utils/nbi_ingest.py`, the files are under `data/nbi/` and `data/hazard/usgs/shakemap/`.
+---
 
 ## API Usage Examples
 
-### Custom earthquake scenario
+### Custom analysis with configuration
 
 ```python
-from src.hazard import EarthquakeScenario, boore_atkinson_2008_sa10
-from src.exposure import generate_synthetic_portfolio, portfolio_to_sites
-from src.engine import run_deterministic, print_deterministic_report
+from src.config import load_config
+from src.data_loader import load_shakemap, load_nbi, classify_nbi_to_hazus
+from src.interpolation import interpolate_im
 
-# Define a custom scenario
-scenario = EarthquakeScenario(Mw=7.2, lat=34.0, lon=-118.3, depth_km=12.0,
-                              fault_type="strike_slip")
+# Load config
+config = load_config("config.yaml")
 
-# Generate or load a portfolio
-portfolio = generate_synthetic_portfolio(n_bridges=200, seed=42)
-
-# Run deterministic analysis
-result = run_deterministic(scenario, portfolio, n_realizations=100)
-print(print_deterministic_report(result))
-```
-
-### Using real NBI data
-
-```python
-from src.data_loader import load_nbi, classify_nbi_to_hazus
-from src.exposure import create_portfolio_from_nbi
-from src.engine import run_deterministic, NORTHRIDGE_SCENARIO
-
-# Load and classify NBI bridges
+# Load data
+sm = load_shakemap("data/grid.xml")
 nbi = load_nbi("data/CA24.txt")
 nbi = classify_nbi_to_hazus(nbi)
 
-# Convert to exposure objects
-portfolio = create_portfolio_from_nbi(nbi, default_vs30=360.0)
-
-# Run analysis
-result = run_deterministic(NORTHRIDGE_SCENARIO, portfolio, n_realizations=50)
+# Interpolate IM to bridge locations
+from src.config import IM_COLUMN_MAP
+im_col = IM_COLUMN_MAP[config.im_type]
+bridge_ims = interpolate_im(
+    sm["LAT"].values, sm["LON"].values, sm[im_col].values,
+    nbi["latitude"].values, nbi["longitude"].values,
+    method=config.interpolation_method,
+)
 ```
 
 ### Single bridge quick check
@@ -565,24 +399,34 @@ from src.hazard import boore_atkinson_2008_sa10
 from src.fragility import damage_state_probabilities
 from src.loss import compute_bridge_loss
 
-# Ground motion at a specific site
 sa, sigma = boore_atkinson_2008_sa10(Mw=6.7, R_JB=15.0, Vs30=360.0)
-
-# Damage probabilities
 probs = damage_state_probabilities(sa, "HWB5")
-
-# Expected loss
 result = compute_bridge_loss(sa, "HWB5", replacement_cost=5_000_000)
 print(f"Sa = {sa:.3f}g, E[Loss] = ${result.expected_loss:,.0f}")
+```
+
+### Custom earthquake scenario
+
+```python
+from src.hazard import EarthquakeScenario
+from src.exposure import generate_synthetic_portfolio
+from src.engine import run_deterministic, print_deterministic_report
+
+scenario = EarthquakeScenario(Mw=7.2, lat=34.0, lon=-118.3,
+                              depth_km=12.0, fault_type="strike_slip")
+portfolio = generate_synthetic_portfolio(n_bridges=200, seed=42)
+result = run_deterministic(scenario, portfolio, n_realizations=100)
+print(print_deterministic_report(result))
 ```
 
 ---
 
 ## References
 
-1. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA at Spectral Periods between 0.01s and 10.0s. _Earthquake Spectra_, 24(1), 99-138.
+1. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA. _Earthquake Spectra_, 24(1), 99-138.
 2. Jayaram, N. & Baker, J.W. (2009). Correlation model for spatially distributed ground-motion intensities. _Earthquake Engineering & Structural Dynamics_, 38(15), 1687-1708.
 3. FEMA (2024). _Hazus 6.1 Earthquake Model Technical Manual_. Federal Emergency Management Agency.
-4. Basoz, N. & Kiremidjian, A. (1998). Evaluation of Bridge Damage Data from the Loma Prieta and Northridge, CA Earthquakes. MCEER-98-0004.
+4. Basoz, N. & Kiremidjian, A. (1998). Evaluation of Bridge Damage Data from the Loma Prieta and Northridge Earthquakes. MCEER-98-0004.
 5. Werner, S.D., et al. (2006). Seismic Risk Analysis of Highway Systems. MCEER-06-0011.
 6. Caltrans (1994). The Northridge Earthquake: Post-Earthquake Investigation Report.
+7. Worden, C.B., et al. (2018). Spatial and spectral interpolation of ground‐motion intensity measure observations. _BSSA_, 108(2), 866-875.

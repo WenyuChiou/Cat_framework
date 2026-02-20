@@ -42,6 +42,9 @@ from src.northridge_case import (
 )
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
+OUTPUT_FRAGILITY = os.path.join(OUTPUT_DIR, "fragility")
+OUTPUT_ANALYSIS = os.path.join(OUTPUT_DIR, "analysis")
+OUTPUT_SCENARIO = os.path.join(OUTPUT_DIR, "scenario")
 
 
 def run_fragility_analysis():
@@ -58,26 +61,26 @@ def run_fragility_analysis():
     # 1. Individual fragility curves
     print("[1/5] Generating individual fragility curves...")
     for hwb in northridge_classes:
-        path = plot_single_class(hwb, im_values, OUTPUT_DIR)
+        path = plot_single_class(hwb, im_values, OUTPUT_FRAGILITY)
         print(f"  Saved: {path}")
 
     # 2. Comparison plots
     print("\n[2/5] Generating comparison plots...")
     for ds in ["slight", "complete"]:
-        path = plot_comparison(northridge_classes, ds, im_values, OUTPUT_DIR)
+        path = plot_comparison(northridge_classes, ds, im_values, OUTPUT_FRAGILITY)
         print(f"  Saved: {path}")
 
     # 3. Damage distribution plots
     print("\n[3/5] Generating damage distribution plots...")
     sample_intensities = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.5, 2.0]
     for hwb in NORTHRIDGE_DAMAGE_STATS["most_vulnerable_types"]:
-        path = plot_damage_distribution(hwb, sample_intensities, OUTPUT_DIR)
+        path = plot_damage_distribution(hwb, sample_intensities, OUTPUT_FRAGILITY)
         print(f"  Saved: {path}")
 
     # 4. Northridge scenario plot
     print("\n[4/5] Generating Northridge scenario plot...")
     pga_range = NORTHRIDGE_GROUND_MOTION["typical_sa_1s_near_field_g"]
-    path = plot_northridge_scenario("HWB5", im_values, pga_range, OUTPUT_DIR)
+    path = plot_northridge_scenario("HWB5", im_values, pga_range, OUTPUT_SCENARIO)
     print(f"  Saved: {path}")
 
     # 5. Scenario report
@@ -206,14 +209,14 @@ def run_data_analysis(
                 sm_im_col = _IM_MAP.get(config.im_type, "PSA10")
                 path_sm = plot_shakemap_grid(
                     sm, intensity_measure=sm_im_col,
-                    output_dir=OUTPUT_DIR, filename="01_shakemap_full_area.png",
+                    output_dir=OUTPUT_ANALYSIS, filename="01_shakemap_full_area.png",
                 )
                 print(f"  Saved: {path_sm}")
                 
                 # 2. Plot NBI bridge distribution map
                 path_nbi = plot_nbi_bridge_distribution_map(
                     nbi,
-                    output_dir=OUTPUT_DIR,
+                    output_dir=OUTPUT_ANALYSIS,
                     filename="02_nbi_bridge_distribution_map.png",
                 )
                 print(f"  Saved: {path_nbi}")
@@ -222,24 +225,24 @@ def run_data_analysis(
                 from src.exposure import SiteParams
                 bridge_sites = [SiteParams(lat=r["latitude"], lon=r["longitude"]) for _, r in nbi.iterrows()]
                 im_vals = nbi["im_selected"].values if "im_selected" in nbi.columns else nbi["sa_10"].values
-                path_gm = plot_ground_motion_field(bridge_sites, im_vals, output_dir=OUTPUT_DIR, filename="03_bridge_site_ground_motion.png")
+                path_gm = plot_ground_motion_field(bridge_sites, im_vals, output_dir=OUTPUT_ANALYSIS, filename="03_bridge_site_ground_motion.png")
                 print(f"  Saved: {path_gm}")
                 
                 # 4. Plot specific damage map
-                path_dm = plot_bridge_damage_map(nbi, damage_state="complete", output_dir=OUTPUT_DIR, filename="04_bridge_damage_spatial.png")
+                path_dm = plot_bridge_damage_map(nbi, damage_state="complete", output_dir=OUTPUT_ANALYSIS, filename="04_bridge_damage_spatial.png")
                 print(f"  Saved: {path_dm}")
 
                 # 5. NEW — Bridges overlaid on ShakeMap contour
                 path_overlay = plot_bridges_on_shakemap(
                     sm, nbi, im_type=config.im_type,
-                    output_dir=OUTPUT_DIR, filename="05_bridges_on_shakemap.png",
+                    output_dir=OUTPUT_ANALYSIS, filename="05_bridges_on_shakemap.png",
                 )
                 print(f"  Saved: {path_overlay}")
 
                 # 6. NEW — Attenuation curve (GMPE vs observed)
                 path_atten = plot_attenuation_curve(
                     nbi, im_type=config.im_type,
-                    output_dir=OUTPUT_DIR, filename="06_attenuation_curve.png",
+                    output_dir=OUTPUT_ANALYSIS, filename="06_attenuation_curve.png",
                 )
                 print(f"  Saved: {path_atten}")
 
@@ -260,11 +263,11 @@ def run_data_analysis(
                     "sa_values": nbi["im_selected"].values if "im_selected" in nbi.columns else nbi["sa_10"].values,
                     "class_breakdown": nbi["hwb_class"].value_counts().to_dict()
                 }
-                path_dash = plot_analysis_summary(stats_dict, output_dir=OUTPUT_DIR, filename="00_analysis_dashboard.png")
+                path_dash = plot_analysis_summary(stats_dict, output_dir=OUTPUT_ANALYSIS, filename="00_analysis_dashboard.png")
                 print(f"  Saved: {path_dash}")
                 
                 # 8. Portfolio damage distribution
-                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="07_portfolio_damage_bars.png")
+                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_ANALYSIS, filename="07_portfolio_damage_bars.png")
                 print(f"  Saved: {path_pd}")
                 
         print()
@@ -431,8 +434,8 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
         print(f"    {ds_name:>10}: {mean_p:.3f} ({mean_p * len(nbi):.0f} bridges)")
 
     # Save results
-    output_path = os.path.join(OUTPUT_DIR, "bridge_damage_results.csv")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(OUTPUT_ANALYSIS, "bridge_damage_results.csv")
+    os.makedirs(OUTPUT_ANALYSIS, exist_ok=True)
     nbi.to_csv(output_path, index=False)
     print(f"\n  Results saved to: {output_path}")
 
@@ -526,7 +529,7 @@ def run_pipeline(n_bridges: int = 100, n_realizations: int = 50):
     # Ground motion field (use median Sa)
     path = plot_ground_motion_field(
         sites, result.median_sa, scenario=NORTHRIDGE_SCENARIO,
-        output_dir=OUTPUT_DIR,
+        output_dir=OUTPUT_SCENARIO,
     )
     print(f"  Saved: {path}")
 
@@ -535,11 +538,11 @@ def run_pipeline(n_bridges: int = 100, n_realizations: int = 50):
     median_idx = np.argsort(losses)[len(losses) // 2]
     rep = result.loss_results[median_idx]
 
-    path = plot_loss_by_class(rep.loss_by_class, output_dir=OUTPUT_DIR)
+    path = plot_loss_by_class(rep.loss_by_class, output_dir=OUTPUT_SCENARIO)
     print(f"  Saved: {path}")
 
     path = plot_portfolio_damage(
-        rep.count_by_ds, len(portfolio), output_dir=OUTPUT_DIR
+        rep.count_by_ds, len(portfolio), output_dir=OUTPUT_SCENARIO
     )
     print(f"  Saved: {path}")
 
@@ -588,7 +591,7 @@ def run_probabilistic_analysis(
     print()
 
     # EP curve plot
-    path = plot_ep_curve(result.ep_curve, output_dir=OUTPUT_DIR)
+    path = plot_ep_curve(result.ep_curve, output_dir=OUTPUT_SCENARIO)
     print(f"  Saved: {path}")
 
     print("\nProbabilistic analysis complete.")
