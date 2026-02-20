@@ -446,6 +446,7 @@ def classify_nbi_to_hazus(
     hwb_filter: list[str] | None = None,
     design_era_filter: str | None = None,
     material_filter: list[str] | None = None,
+    nbi_filters: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """
     Add Hazus bridge class (HWB) column to NBI DataFrame.
@@ -535,6 +536,36 @@ def classify_nbi_to_hazus(
 
     if material_filter:
         nbi_df = nbi_df[nbi_df["material"].isin(material_filter)].copy()
+
+    # Generic NBI column filters (key=value, key>value, etc.)
+    if nbi_filters:
+        for col, condition in nbi_filters.items():
+            if col not in nbi_df.columns:
+                print(f"  [Filter] Warning: column '{col}' not found, skipping")
+                continue
+            # List match
+            if isinstance(condition, list):
+                nbi_df = nbi_df[nbi_df[col].astype(str).isin([str(v) for v in condition])].copy()
+            # Numeric comparisons
+            elif isinstance(condition, str) and condition[:2] in (">=", "<="):
+                op = condition[:2]
+                val = float(condition[2:])
+                num_col = pd.to_numeric(nbi_df[col], errors="coerce")
+                if op == ">=":
+                    nbi_df = nbi_df[num_col >= val].copy()
+                else:
+                    nbi_df = nbi_df[num_col <= val].copy()
+            elif isinstance(condition, str) and condition[0] in (">", "<"):
+                op = condition[0]
+                val = float(condition[1:])
+                num_col = pd.to_numeric(nbi_df[col], errors="coerce")
+                if op == ">":
+                    nbi_df = nbi_df[num_col > val].copy()
+                else:
+                    nbi_df = nbi_df[num_col < val].copy()
+            else:
+                # Exact match
+                nbi_df = nbi_df[nbi_df[col].astype(str) == str(condition)].copy()
 
     if n_before != len(nbi_df):
         print(f"  [Filter] {n_before} → {len(nbi_df)} bridges after filtering")

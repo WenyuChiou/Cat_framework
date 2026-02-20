@@ -1,0 +1,74 @@
+# ─────────────────────────────────────────────────────────────
+# CAT411 Analysis Configuration
+# ─────────────────────────────────────────────────────────────
+# This file controls which bridges to analyze, which IM to use,
+# and fragility/calibration parameters. All sections are optional;
+# defaults are used when omitted.
+
+# ── 1. Region ────────────────────────────────────────────────
+# Bounding box to filter bridge inventory (lat/lon in degrees).
+# Omit to use the default Northridge greater-LA area.
+region:
+  lat_min: 33.8
+  lat_max: 34.6
+  lon_min: -118.9
+  lon_max: -118.0
+
+# ── 2. Bridge Selection ──────────────────────────────────────
+# Filters applied to the NBI data AFTER Hazus classification.
+# Each entry is a column name and a condition string.
+#   Exact match:       county: "037"         (Los Angeles county)
+#   Numeric >=/<=/>/< : year_built: ">1960"
+#   List of values:     material: ["concrete", "steel"]
+#
+# Available NBI columns:
+#   structure_number, state, county, latitude, longitude,
+#   year_built, material, material_code, design_code,
+#   num_spans, structure_length_m, deck_width_m, condition_rating
+bridge_selection:
+  # county: "037"
+  # year_built: ">1960"
+  # material: ["concrete"]
+
+# HWB class filter (list of Hazus bridge class codes)
+# hwb_filter: ["HWB5", "HWB17"]
+
+# Design era filter: "conventional" (pre-1975) or "seismic" (post-1975)
+# design_era: "conventional"
+
+# ── 3. Intensity Measure ─────────────────────────────────────
+# Which IM from ShakeMap to use for fragility analysis.
+# Options: PGA, SA03 (Sa 0.3s), SA10 (Sa 1.0s), SA30 (Sa 3.0s)
+im_type: SA10
+
+# ── 4. Fragility Parameters ──────────────────────────────────
+# Override or add custom fragility parameters for specific HWB
+# classes. Each entry needs median and beta for each damage state.
+# If omitted, defaults from hazus_params.py (Hazus 6.1) are used.
+#
+# fragility_overrides:
+#   HWB5:
+#     slight:    {median: 0.30, beta: 0.55}
+#     moderate:  {median: 0.50, beta: 0.55}
+#     extensive: {median: 0.70, beta: 0.55}
+#     complete:  {median: 1.00, beta: 0.55}
+
+# ── 5. Calibration ───────────────────────────────────────────
+# Calibration factors applied to fragility medians.
+# Use these to adjust vulnerability up or down for specific bridge
+# types based on regional observed data or expert judgment.
+#
+# A factor < 1.0 means the bridge is MORE vulnerable (lower capacity).
+# A factor > 1.0 means the bridge is LESS vulnerable (higher capacity).
+#
+# calibration:
+#   global_median_factor: 1.0        # Applied to ALL bridge classes
+#   class_factors:                   # Applied to specific classes only
+#     HWB5: 0.90                    # 10% more vulnerable than Hazus default
+#     HWB17: 1.10                   # 10% less vulnerable
+
+# ── 6. Analysis Settings ─────────────────────────────────────
+analysis:
+  n_realizations: 50 # Monte Carlo realizations per event
+  n_events: 50 # Stochastic events for probabilistic mode
+  seed: 42 # Random seed for reproducibility

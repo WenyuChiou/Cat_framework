@@ -94,6 +94,7 @@ def run_data_analysis(
     material_filter=None,
     design_era=None,
     bbox=None,
+    config=None,
 ):
     """Load real data and run integrated analysis."""
     from src.data_loader import (
@@ -103,24 +104,28 @@ def run_data_analysis(
         classify_nbi_to_hazus,
         DATA_DIR,
     )
+    from src.config import AnalysisConfig, print_config_summary, IM_COLUMN_MAP
+
+    # Merge CLI args into config (CLI overrides config.yaml)
+    if config is None:
+        config = AnalysisConfig()
+    if hwb_filter:
+        config.hwb_filter = hwb_filter
+    if material_filter:
+        config.material_filter = material_filter
+    if design_era:
+        config.design_era = design_era
+    if bbox:
+        config.region = {
+            "lat_min": bbox[0], "lat_max": bbox[1],
+            "lon_min": bbox[2], "lon_max": bbox[3],
+        }
 
     print("=" * 60)
     print("Loading Real Data for Northridge Analysis")
     print("=" * 60)
     print()
-
-    # Print active filters
-    if any([hwb_filter, material_filter, design_era, bbox]):
-        print("[Filters] Active analysis filters:")
-        if hwb_filter:
-            print(f"  HWB Classes: {hwb_filter}")
-        if material_filter:
-            print(f"  Materials: {material_filter}")
-        if design_era:
-            print(f"  Design Era: {design_era}")
-        if bbox:
-            print(f"  Bounding Box: lat[{bbox[0]},{bbox[1]}] lon[{bbox[2]},{bbox[3]}]")
-        print()
+    print_config_summary(config)
 
     # --- ShakeMap ---
     shakemap_path = DATA_DIR / "grid.xml"
@@ -128,9 +133,13 @@ def run_data_analysis(
         print("[ShakeMap] Loading grid.xml...")
         sm = load_shakemap()
         print(f"  Grid points: {len(sm):,}")
-        print(f"  PGA range:   {sm['PGA'].min():.3f}g – {sm['PGA'].max():.3f}g")
-        if "PSA10" in sm.columns:
-            print(f"  Sa(1.0s) range: {sm['PSA10'].min():.3f}g – {sm['PSA10'].max():.3f}g")
+        print(f"  Available IMs: {[c for c in sm.columns if c in IM_COLUMN_MAP.values()]}")
+        im_col = config.im_column
+        if im_col in sm.columns:
+            print(f"  Selected IM ({config.im_type}): "
+                  f"{sm[im_col].min():.3f}g – {sm[im_col].max():.3f}g")
+        else:
+            print(f"  ⚠ Selected IM column '{im_col}' not found in ShakeMap!")
         print(f"  Bounding box: ({sm['LAT'].min():.2f}, {sm['LON'].min():.2f}) "
               f"to ({sm['LAT'].max():.2f}, {sm['LON'].max():.2f})")
         print()
@@ -162,13 +171,7 @@ def run_data_analysis(
     if nbi_files:
         nbi_path = nbi_files[0]
         print(f"[NBI] Loading {nbi_path.name}...")
-        # Build custom bounding box if specified
-        nbi_bbox = None
-        if bbox:
-            nbi_bbox = {
-                "lat_min": bbox[0], "lat_max": bbox[1],
-                "lon_min": bbox[2], "lon_max": bbox[3],
-            }
+        nbi_bbox = config.bbox_dict
         nbi = load_nbi(nbi_path, northridge_bbox=nbi_bbox)
         print(f"  Bridges in Northridge area: {len(nbi):,}")
         if len(nbi) > 0:
@@ -179,9 +182,10 @@ def run_data_analysis(
             print("\n[NBI] Classifying bridges into Hazus classes...")
             nbi = classify_nbi_to_hazus(
                 nbi,
-                hwb_filter=hwb_filter,
-                design_era_filter=design_era,
-                material_filter=material_filter,
+                hwb_filter=config.hwb_filter,
+                design_era_filter=config.design_era,
+                material_filter=config.material_filter,
+                nbi_filters=config.bridge_selection,
             )
             hwb_counts = nbi["hwb_class"].value_counts().sort_index()
             print("  HWB class distribution:")
@@ -189,8 +193,9 @@ def run_data_analysis(
                 print(f"    {hwb}: {count}")
 
             # Compute expected damage for each bridge using ShakeMap data
-            if sm is not None and "PSA10" in sm.columns:
-                _compute_bridge_damage(nbi, sm)
+            im_col = config.im_column
+            if sm is not None and im_col in sm.columns:
+                _compute_bridge_damage(nbi, sm, config)
                 
                 # Visualizations for real data
                 print("\n[Analysis] Generating visualizations for real data...")
@@ -248,11 +253,57 @@ def run_data_analysis(
     return sm, stations, nbi
 
 
-def _compute_bridge_damage(nbi, shakemap):
-    """Assign ShakeMap Sa(1.0s) to each bridge and compute damage probs."""
-    from scipy.spatial import cKDTree
+def _calibrated_damage_probs(im_val: float, hwb_class: str, cal_factor: float) -> dict:
+    """Compute damage probs with calibrated fragility medians.
 
-    print("\n[Analysis] Assigning ground motion to bridges...")
+    Multiplies all Hazus medians by cal_factor before computing.
+    factor < 1.0 → more vulnerable, factor > 1.0 → less vulnerable.
+    """
+    import numpy as np
+    from src.fragility import fragility_curve
+    from src.hazus_params import HAZUS_BRIDGE_FRAGILITY, DAMAGE_STATE_ORDER
+
+    params = HAZUS_BRIDGE_FRAGILITY.get(hwb_class)
+    if params is None:
+        return {"none": 1.0, "slight": 0.0, "moderate": 0.0,
+                "extensive": 0.0, "complete": 0.0}
+
+    ds_params = params["damage_states"]
+    exceed = {}
+    for ds in DAMAGE_STATE_ORDER:
+        med = ds_params[ds]["median"] * cal_factor
+        beta = ds_params[ds]["beta"]
+        exceed[ds] = float(fragility_curve(np.array([im_val]), med, beta)[0])
+
+    probs = {
+        "none":      1.0 - exceed.get("slight", 0.0),
+        "slight":    exceed.get("slight", 0.0) - exceed.get("moderate", 0.0),
+        "moderate":  exceed.get("moderate", 0.0) - exceed.get("extensive", 0.0),
+        "extensive": exceed.get("extensive", 0.0) - exceed.get("complete", 0.0),
+        "complete":  exceed.get("complete", 0.0),
+    }
+    return probs
+
+
+def _compute_bridge_damage(nbi, shakemap, config=None):
+    """Assign ShakeMap IM to each bridge and compute damage probs.
+
+    Parameters
+    ----------
+    nbi : pd.DataFrame
+        NBI bridge data with 'latitude', 'longitude', 'hwb_class'.
+    shakemap : pd.DataFrame
+        ShakeMap grid data with 'LAT', 'LON', and IM columns.
+    config : AnalysisConfig, optional
+        Analysis configuration (IM type, calibration, fragility overrides).
+    """
+    from scipy.spatial import cKDTree
+    from src.config import AnalysisConfig, IM_COLUMN_MAP
+
+    if config is None:
+        config = AnalysisConfig()
+
+    print(f"\n[Analysis] Assigning ground motion to bridges (IM: {config.im_type})...")
 
     # Build KD-tree from ShakeMap grid
     grid_coords = shakemap[["LAT", "LON"]].values
@@ -261,19 +312,85 @@ def _compute_bridge_damage(nbi, shakemap):
     bridge_coords = nbi[["latitude", "longitude"]].values
     _, indices = tree.query(bridge_coords)
 
-    nbi["sa_10"] = shakemap["PSA10"].values[indices]
-    nbi["pga"] = shakemap["PGA"].values[indices]
+    # Assign ALL available IMs from ShakeMap
+    for im_name, sm_col in IM_COLUMN_MAP.items():
+        if sm_col in shakemap.columns:
+            nbi[f"im_{im_name}"] = shakemap[sm_col].values[indices]
 
-    print(f"  Bridges with Sa(1.0s) assigned: {nbi['sa_10'].notna().sum()}")
-    print(f"  Sa(1.0s) at bridge sites: "
-          f"{nbi['sa_10'].min():.3f}g – {nbi['sa_10'].max():.3f}g")
+    # Select the configured IM for fragility analysis
+    im_col = config.im_column
+    nbi["im_selected"] = shakemap[im_col].values[indices]
+
+    # Also keep legacy aliases for backward compatibility
+    if "PSA10" in shakemap.columns:
+        nbi["sa_10"] = shakemap["PSA10"].values[indices]
+    if "PGA" in shakemap.columns:
+        nbi["pga"] = shakemap["PGA"].values[indices]
+
+    print(f"  Bridges with IM assigned: {nbi['im_selected'].notna().sum()}")
+    print(f"  {config.im_type} at bridge sites: "
+          f"{nbi['im_selected'].min():.3f}g – {nbi['im_selected'].max():.3f}g")
+
+    # Show all IM ranges
+    for im_name, sm_col in IM_COLUMN_MAP.items():
+        col = f"im_{im_name}"
+        if col in nbi.columns:
+            print(f"    {im_name:>4}: {nbi[col].min():.4f}g – {nbi[col].max():.4f}g"
+                  + (" ← selected" if im_name == config.im_type else ""))
 
     # Compute damage probabilities per bridge
     print("\n[Analysis] Computing damage state probabilities...")
+
+    # Check for fragility overrides and calibration
+    has_overrides = bool(config.fragility_overrides)
+    has_calibration = (config.global_median_factor != 1.0 or bool(config.class_factors))
+    if has_overrides:
+        print(f"  Using fragility overrides for: {list(config.fragility_overrides.keys())}")
+    if has_calibration:
+        print(f"  Calibration: global={config.global_median_factor}, "
+              f"class={config.class_factors}")
+
     ds_cols = ["P_none", "P_slight", "P_moderate", "P_extensive", "P_complete"]
 
     for _, row in nbi.iterrows():
-        probs = damage_state_probabilities(row["sa_10"], row["hwb_class"])
+        im_val = row["im_selected"]
+        hwb = row["hwb_class"]
+
+        # Use overridden fragility if available, otherwise default
+        if hwb in config.fragility_overrides:
+            # Custom fragility params from config
+            custom = config.fragility_overrides[hwb]
+            from src.fragility import fragility_curve
+            import numpy as np
+
+            ds_order = ["slight", "moderate", "extensive", "complete"]
+            exceed = {}
+            for ds in ds_order:
+                if ds in custom:
+                    med = custom[ds]["median"]
+                    beta = custom[ds]["beta"]
+                    # Apply calibration
+                    cal = config.class_factors.get(hwb, config.global_median_factor)
+                    med *= cal
+                    exceed[ds] = float(fragility_curve(np.array([im_val]), med, beta)[0])
+                else:
+                    exceed[ds] = 0.0
+
+            probs = {
+                "none":      1.0 - exceed.get("slight", 0.0),
+                "slight":    exceed.get("slight", 0.0) - exceed.get("moderate", 0.0),
+                "moderate":  exceed.get("moderate", 0.0) - exceed.get("extensive", 0.0),
+                "extensive": exceed.get("extensive", 0.0) - exceed.get("complete", 0.0),
+                "complete":  exceed.get("complete", 0.0),
+            }
+        else:
+            # Default Hazus fragility, with optional calibration
+            if has_calibration:
+                cal_factor = config.class_factors.get(hwb, config.global_median_factor)
+                probs = _calibrated_damage_probs(im_val, hwb, cal_factor)
+            else:
+                probs = damage_state_probabilities(im_val, hwb)
+
         for ds_key, col in zip(
             ["none", "slight", "moderate", "extensive", "complete"], ds_cols
         ):
@@ -458,6 +575,7 @@ def run_full_analysis(
     material_filter=None,
     design_era=None,
     bbox=None,
+    config=None,
 ):
     """Run the complete automated end-to-end analysis pipeline."""
     print("\n" + "="*60)
@@ -476,6 +594,7 @@ def run_full_analysis(
         material_filter=material_filter,
         design_era=design_era,
         bbox=bbox,
+        config=config,
     )
     
     # 3. Generate Fragility Library
@@ -588,6 +707,19 @@ def main():
 
     # ── Focused analysis filters ──────────────────────────────────────
     parser.add_argument(
+        "--config",
+        type=str,
+        default="config.yaml",
+        help="Path to analysis config file (default: config.yaml)",
+    )
+    parser.add_argument(
+        "--im-type",
+        type=str,
+        choices=["PGA", "SA03", "SA10", "SA30"],
+        default=None,
+        help="IM type from ShakeMap (default: SA10). Overrides config.yaml.",
+    )
+    parser.add_argument(
         "--hwb-filter",
         type=str,
         nargs="+",
@@ -616,7 +748,43 @@ def main():
         default=None,
         help="Custom bounding box (e.g. --bbox 34.0 34.5 -118.8 -118.2)",
     )
+    parser.add_argument(
+        "--nbi-filter",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Generic NBI column filters as key=value (e.g. --nbi-filter county=037 'year_built>1960')",
+    )
     args = parser.parse_args()
+
+    # Load config file and merge CLI overrides
+    from src.config import load_config
+    cfg = load_config(args.config)
+
+    # CLI im-type overrides config
+    if args.im_type:
+        cfg.im_type = args.im_type
+
+    # CLI nbi-filter merges into bridge_selection
+    if args.nbi_filter:
+        for filt in args.nbi_filter:
+            if ">=" in filt:
+                k, v = filt.split(">=", 1)
+                cfg.bridge_selection[k.strip()] = ">=" + v.strip()
+            elif "<=" in filt:
+                k, v = filt.split("<=", 1)
+                cfg.bridge_selection[k.strip()] = "<=" + v.strip()
+            elif ">" in filt:
+                k, v = filt.split(">", 1)
+                cfg.bridge_selection[k.strip()] = ">" + v.strip()
+            elif "<" in filt:
+                k, v = filt.split("<", 1)
+                cfg.bridge_selection[k.strip()] = "<" + v.strip()
+            elif "=" in filt:
+                k, v = filt.split("=", 1)
+                cfg.bridge_selection[k.strip()] = v.strip()
+            else:
+                print(f"[Warning] Cannot parse filter: {filt}")
 
     if args.interactive:
         run_interactive_menu()
@@ -630,6 +798,7 @@ def main():
             material_filter=args.material_filter,
             design_era=args.design_era,
             bbox=args.bbox,
+            config=cfg,
         )
         return
 
@@ -645,6 +814,7 @@ def main():
             material_filter=args.material_filter,
             design_era=args.design_era,
             bbox=args.bbox,
+            config=cfg,
         )
         return
 
