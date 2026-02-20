@@ -698,3 +698,215 @@ def plot_analysis_summary(
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return path
+
+
+# ── New: Combined ShakeMap + Bridges Overlay ─────────────────────────────
+
+def plot_bridges_on_shakemap(
+    shakemap_df: pd.DataFrame,
+    nbi_df: pd.DataFrame,
+    im_type: str = "SA10",
+    output_dir: str = "output",
+    filename: str = "bridges_on_shakemap.png",
+) -> str:
+    """
+    Overlay filtered bridge locations on a ShakeMap IM contour map.
+
+    Parameters
+    ----------
+    shakemap_df : pd.DataFrame
+        ShakeMap grid with LAT, LON, and IM columns.
+    nbi_df : pd.DataFrame
+        Bridge data with latitude, longitude, im_selected columns.
+    im_type : str
+        IM type label for axis/title (e.g. "SA10", "PGA").
+    output_dir : str
+    filename : str
+
+    Returns
+    -------
+    str
+        Path to saved figure.
+    """
+    from src.config import IM_COLUMN_MAP
+    sm_col = IM_COLUMN_MAP.get(im_type, "PSA10")
+    if sm_col not in shakemap_df.columns:
+        sm_col = "PSA10"
+
+    im_label_map = {
+        "PGA": "PGA [g]",
+        "SA03": "Sa(0.3s) [g]",
+        "SA10": "Sa(1.0s) [g]",
+        "SA30": "Sa(3.0s) [g]",
+    }
+    im_label = im_label_map.get(im_type, f"{im_type} [g]")
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+
+    # Background: ShakeMap contour
+    sm_lats = shakemap_df["LAT"].values
+    sm_lons = shakemap_df["LON"].values
+    sm_vals = shakemap_df[sm_col].values
+
+    try:
+        from scipy.interpolate import griddata
+        grid_lon = np.linspace(sm_lons.min(), sm_lons.max(), 200)
+        grid_lat = np.linspace(sm_lats.min(), sm_lats.max(), 200)
+        glon, glat = np.meshgrid(grid_lon, grid_lat)
+        grid_vals = griddata(
+            np.column_stack([sm_lons, sm_lats]), sm_vals,
+            (glon, glat), method="linear",
+        )
+        contour = ax.contourf(
+            glon, glat, grid_vals, levels=20,
+            cmap="YlOrRd", alpha=0.6,
+        )
+        cbar = fig.colorbar(contour, ax=ax, shrink=0.8, pad=0.02)
+    except Exception:
+        sc_bg = ax.scatter(
+            sm_lons, sm_lats, c=sm_vals, cmap="YlOrRd",
+            s=1, alpha=0.3, edgecolors="none",
+        )
+        cbar = fig.colorbar(sc_bg, ax=ax, shrink=0.8)
+
+    cbar.set_label(im_label, fontsize=12)
+
+    # Overlay: Bridges
+    im_col = "im_selected" if "im_selected" in nbi_df.columns else "sa_10"
+    bridge_vals = nbi_df[im_col].values if im_col in nbi_df.columns else np.zeros(len(nbi_df))
+
+    sc = ax.scatter(
+        nbi_df["longitude"], nbi_df["latitude"],
+        c=bridge_vals, cmap="cool", s=30,
+        edgecolors="black", linewidths=0.5,
+        vmin=0, vmax=max(0.3, np.percentile(bridge_vals, 95)),
+        zorder=5,
+    )
+    cbar2 = fig.colorbar(sc, ax=ax, shrink=0.5, pad=0.06, location="left")
+    cbar2.set_label(f"Bridge {im_label}", fontsize=10)
+
+    ax.set_xlabel("Longitude", fontsize=12)
+    ax.set_ylabel("Latitude", fontsize=12)
+    ax.set_title(
+        f"Bridges on ShakeMap — {im_type} ({len(nbi_df)} bridges)",
+        fontsize=14, fontweight="bold",
+    )
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+# ── New: GMPE Attenuation Curve ──────────────────────────────────────────
+
+def plot_attenuation_curve(
+    nbi_df: pd.DataFrame,
+    epicenter_lat: float = 34.213,
+    epicenter_lon: float = -118.537,
+    Mw: float = 6.7,
+    im_type: str = "SA10",
+    output_dir: str = "output",
+    filename: str = "attenuation_curve.png",
+) -> str:
+    """
+    Plot GMPE attenuation prediction vs observed bridge IM (like USGS page).
+
+    X-axis: distance from epicenter (km).
+    Y-axis: IM (g).
+    Line: BA08 GMPE median prediction ± 1σ.
+    Scatter: actual bridge IM values from ShakeMap.
+
+    Parameters
+    ----------
+    nbi_df : pd.DataFrame
+        Bridge data with latitude, longitude, im_selected, hwb_class.
+    epicenter_lat, epicenter_lon : float
+        Earthquake epicenter coordinates.
+    Mw : float
+        Moment magnitude.
+    im_type : str
+        IM type label.
+    output_dir : str
+    filename : str
+    """
+    from src.hazard import haversine_distance_km, boore_atkinson_2008_sa10
+
+    im_label_map = {
+        "PGA": "PGA [g]",
+        "SA03": "Sa(0.3s) [g]",
+        "SA10": "Sa(1.0s) [g]",
+        "SA30": "Sa(3.0s) [g]",
+    }
+    im_label = im_label_map.get(im_type, f"{im_type} [g]")
+
+    # Compute distance from epicenter for each bridge
+    distances = np.array([
+        haversine_distance_km(epicenter_lat, epicenter_lon, lat, lon)
+        for lat, lon in zip(nbi_df["latitude"], nbi_df["longitude"])
+    ])
+
+    # Bridge IMs
+    im_col = "im_selected" if "im_selected" in nbi_df.columns else "sa_10"
+    bridge_ims = nbi_df[im_col].values if im_col in nbi_df.columns else np.zeros(len(nbi_df))
+
+    # GMPE prediction curve
+    d_range = np.logspace(np.log10(1), np.log10(max(200, distances.max() * 1.2)), 100)
+    gmpe_median = np.zeros_like(d_range)
+    gmpe_sigma = np.zeros_like(d_range)
+
+    for i, d in enumerate(d_range):
+        med, sig = boore_atkinson_2008_sa10(Mw, d, Vs30=760.0, fault_type="reverse")
+        gmpe_median[i] = med
+        gmpe_sigma[i] = sig
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # ±1σ band
+    upper = gmpe_median * np.exp(gmpe_sigma)
+    lower = gmpe_median * np.exp(-gmpe_sigma)
+    ax.fill_between(d_range, lower, upper, alpha=0.15, color="blue",
+                    label="BA08 ±1σ")
+
+    # Median line
+    ax.plot(d_range, gmpe_median, "b-", linewidth=2.5,
+            label=f"BA08 Median (Mw {Mw:.1f})")
+
+    # Bridge scatter (colored by HWB class)
+    if "hwb_class" in nbi_df.columns:
+        unique_classes = sorted(nbi_df["hwb_class"].unique())
+        cmap = plt.cm.Set1(np.linspace(0, 1, max(len(unique_classes), 1)))
+        for j, hwb in enumerate(unique_classes[:8]):  # max 8 classes for clarity
+            mask = nbi_df["hwb_class"] == hwb
+            ax.scatter(
+                distances[mask], bridge_ims[mask],
+                color=cmap[j], s=20, alpha=0.6,
+                edgecolors="k", linewidths=0.3,
+                label=hwb, zorder=5,
+            )
+    else:
+        ax.scatter(distances, bridge_ims, c="red", s=20, alpha=0.5,
+                   edgecolors="k", linewidths=0.3, label="Bridges", zorder=5)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Distance from Epicenter (km)", fontsize=12)
+    ax.set_ylabel(im_label, fontsize=12)
+    ax.set_title(
+        f"Ground Motion Attenuation — Mw {Mw:.1f} | {im_type}\n"
+        f"(BA08 GMPE vs ShakeMap bridge values)",
+        fontsize=13, fontweight="bold",
+    )
+    ax.legend(fontsize=8, loc="upper right", ncol=2)
+    ax.grid(True, alpha=0.3, which="both")
+    ax.set_xlim(1, max(200, distances.max() * 1.2))
+    fig.tight_layout()
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path

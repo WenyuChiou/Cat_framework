@@ -16,8 +16,7 @@ region:
 
 # ── 2. Bridge Selection ──────────────────────────────────────
 # Filters applied to the NBI data AFTER Hazus classification.
-# Each entry is a column name and a condition string.
-#   Exact match:       county: "037"         (Los Angeles county)
+#   Exact match:       county: "037"
 #   Numeric >=/<=/>/< : year_built: ">1960"
 #   List of values:     material: ["concrete", "steel"]
 #
@@ -36,16 +35,47 @@ bridge_selection:
 # Design era filter: "conventional" (pre-1975) or "seismic" (post-1975)
 # design_era: "conventional"
 
-# ── 3. Intensity Measure ─────────────────────────────────────
-# Which IM from ShakeMap to use for fragility analysis.
+# ── 3. IM Source ─────────────────────────────────────────────
+# Where to get Intensity Measure values for each bridge.
+#   shakemap : Read from USGS ShakeMap grid.xml (default, most accurate)
+#   gmpe     : Calculate from BA08 GMPE using scenario parameters below
+im_source: shakemap
+
+# ── 4. Intensity Measure ─────────────────────────────────────
+# Which IM type to use for fragility analysis.
 # Options: PGA, SA03 (Sa 0.3s), SA10 (Sa 1.0s), SA30 (Sa 3.0s)
 im_type: SA10
 
-# ── 4. Fragility Parameters ──────────────────────────────────
-# Override or add custom fragility parameters for specific HWB
-# classes. Each entry needs median and beta for each damage state.
-# If omitted, defaults from hazus_params.py (Hazus 6.1) are used.
-#
+# ── 5. Spatial Interpolation ─────────────────────────────────
+# Method used to assign ShakeMap grid IM to bridge locations.
+# Options:
+#   nearest          : Nearest grid point (fastest, default)
+#   idw              : Inverse Distance Weighting (smooth, configurable)
+#   bilinear         : Bilinear grid interpolation (regular grids)
+#   natural_neighbor : Voronoi/Delaunay-based (good for irregular data)
+#   kriging          : Ordinary Kriging (geostatistical, most accurate)
+interpolation:
+  method: nearest
+  # IDW-specific settings:
+  # power: 2.0               # distance exponent (higher = more local)
+  # n_neighbors: 8           # number of nearby grid points to use
+  # Kriging-specific settings:
+  # range_km: 50.0           # variogram range (Sa 1.0s ≈ 40-50 km)
+  # nugget: 0.01             # measurement noise
+
+# ── 6. GMPE Scenario (for im_source: gmpe) ───────────────────
+# Only used when im_source is set to "gmpe".
+# Defines the earthquake scenario for GMPE-based IM calculation.
+# gmpe_scenario:
+#   Mw: 6.7                 # Moment magnitude
+#   lat: 34.213             # Epicenter latitude
+#   lon: -118.537           # Epicenter longitude
+#   depth_km: 18.4          # Hypocentral depth
+#   fault_type: reverse     # strike_slip, normal, reverse, unspecified
+#   vs30: 760               # Default site Vs30 (m/s)
+
+# ── 7. Fragility Parameters ──────────────────────────────────
+# Override Hazus defaults for specific HWB classes.
 # fragility_overrides:
 #   HWB5:
 #     slight:    {median: 0.30, beta: 0.55}
@@ -53,22 +83,17 @@ im_type: SA10
 #     extensive: {median: 0.70, beta: 0.55}
 #     complete:  {median: 1.00, beta: 0.55}
 
-# ── 5. Calibration ───────────────────────────────────────────
-# Calibration factors applied to fragility medians.
-# Use these to adjust vulnerability up or down for specific bridge
-# types based on regional observed data or expert judgment.
-#
-# A factor < 1.0 means the bridge is MORE vulnerable (lower capacity).
-# A factor > 1.0 means the bridge is LESS vulnerable (higher capacity).
-#
+# ── 8. Calibration ───────────────────────────────────────────
+# Factors applied to fragility medians to adjust vulnerability.
+# factor < 1.0 → more vulnerable; factor > 1.0 → less vulnerable
 # calibration:
-#   global_median_factor: 1.0        # Applied to ALL bridge classes
-#   class_factors:                   # Applied to specific classes only
-#     HWB5: 0.90                    # 10% more vulnerable than Hazus default
-#     HWB17: 1.10                   # 10% less vulnerable
+#   global_median_factor: 1.0
+#   class_factors:
+#     HWB5: 0.90
+#     HWB17: 1.10
 
-# ── 6. Analysis Settings ─────────────────────────────────────
+# ── 9. Analysis Settings ─────────────────────────────────────
 analysis:
-  n_realizations: 50 # Monte Carlo realizations per event
-  n_events: 50 # Stochastic events for probabilistic mode
-  seed: 42 # Random seed for reproducibility
+  n_realizations: 50
+  n_events: 50
+  seed: 42

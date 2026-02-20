@@ -32,6 +32,8 @@ from src.plotting import (
     plot_bridge_damage_map,
     plot_nbi_bridge_distribution_map,
     plot_analysis_summary,
+    plot_bridges_on_shakemap,
+    plot_attenuation_curve,
 )
 from src.northridge_case import (
     NORTHRIDGE_GROUND_MOTION,
@@ -199,8 +201,13 @@ def run_data_analysis(
                 
                 # Visualizations for real data
                 print("\n[Analysis] Generating visualizations for real data...")
-                # 1. Plot full ShakeMap area
-                path_sm = plot_shakemap_grid(sm, output_dir=OUTPUT_DIR, filename="01_shakemap_full_area.png")
+                # 1. Plot full ShakeMap area (configured IM)
+                from src.config import IM_COLUMN_MAP as _IM_MAP
+                sm_im_col = _IM_MAP.get(config.im_type, "PSA10")
+                path_sm = plot_shakemap_grid(
+                    sm, intensity_measure=sm_im_col,
+                    output_dir=OUTPUT_DIR, filename="01_shakemap_full_area.png",
+                )
                 print(f"  Saved: {path_sm}")
                 
                 # 2. Plot NBI bridge distribution map
@@ -211,37 +218,53 @@ def run_data_analysis(
                 )
                 print(f"  Saved: {path_nbi}")
 
-                # 3. Plot ground motion at bridge sites
+                # 3. Plot ground motion at bridge sites (use im_selected)
                 from src.exposure import SiteParams
                 bridge_sites = [SiteParams(lat=r["latitude"], lon=r["longitude"]) for _, r in nbi.iterrows()]
-                path_gm = plot_ground_motion_field(bridge_sites, nbi["sa_10"].values, output_dir=OUTPUT_DIR, filename="03_bridge_site_ground_motion.png")
+                im_vals = nbi["im_selected"].values if "im_selected" in nbi.columns else nbi["sa_10"].values
+                path_gm = plot_ground_motion_field(bridge_sites, im_vals, output_dir=OUTPUT_DIR, filename="03_bridge_site_ground_motion.png")
                 print(f"  Saved: {path_gm}")
                 
                 # 4. Plot specific damage map
                 path_dm = plot_bridge_damage_map(nbi, damage_state="complete", output_dir=OUTPUT_DIR, filename="04_bridge_damage_spatial.png")
                 print(f"  Saved: {path_dm}")
 
-                # 5. Portfolio summary stats & Dashboard
+                # 5. NEW — Bridges overlaid on ShakeMap contour
+                path_overlay = plot_bridges_on_shakemap(
+                    sm, nbi, im_type=config.im_type,
+                    output_dir=OUTPUT_DIR, filename="05_bridges_on_shakemap.png",
+                )
+                print(f"  Saved: {path_overlay}")
+
+                # 6. NEW — Attenuation curve (GMPE vs observed)
+                path_atten = plot_attenuation_curve(
+                    nbi, im_type=config.im_type,
+                    output_dir=OUTPUT_DIR, filename="06_attenuation_curve.png",
+                )
+                print(f"  Saved: {path_atten}")
+
+                # 7. Portfolio summary stats & Dashboard
                 count_by_ds = {ds: nbi[f"P_{ds}"].mean() * len(nbi) for ds in ["none", "slight", "moderate", "extensive", "complete"]}
                 
-                # Simple loss estimate for summary
                 total_loss = nbi["expected_loss"].sum() if "expected_loss" in nbi.columns else 0
                 
                 stats_dict = {
                     "event_id": "Northridge (ci3144585)",
                     "total_bridges": len(nbi),
                     "max_pga": sm["PGA"].max() if "PGA" in sm.columns else 0,
-                    "avg_sa": nbi["sa_10"].mean(),
+                    "avg_sa": nbi["im_selected"].mean() if "im_selected" in nbi.columns else 0,
+                    "im_type": config.im_type,
+                    "interpolation": config.interpolation_method,
                     "total_loss": total_loss,
                     "damage_distribution": count_by_ds,
-                    "sa_values": nbi["sa_10"].values,
+                    "sa_values": nbi["im_selected"].values if "im_selected" in nbi.columns else nbi["sa_10"].values,
                     "class_breakdown": nbi["hwb_class"].value_counts().to_dict()
                 }
                 path_dash = plot_analysis_summary(stats_dict, output_dir=OUTPUT_DIR, filename="00_analysis_dashboard.png")
                 print(f"  Saved: {path_dash}")
                 
-                # 6. Plot portfolio damage distribution (legacy style)
-                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="05_portfolio_damage_bars.png")
+                # 8. Portfolio damage distribution
+                path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_DIR, filename="07_portfolio_damage_bars.png")
                 print(f"  Saved: {path_pd}")
                 
         print()
@@ -297,35 +320,40 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
     config : AnalysisConfig, optional
         Analysis configuration (IM type, calibration, fragility overrides).
     """
-    from scipy.spatial import cKDTree
     from src.config import AnalysisConfig, IM_COLUMN_MAP
 
     if config is None:
         config = AnalysisConfig()
 
-    print(f"\n[Analysis] Assigning ground motion to bridges (IM: {config.im_type})...")
+    print(f"\n[Analysis] Assigning ground motion to bridges "
+          f"(IM: {config.im_type}, interpolation: {config.interpolation_method})...")
 
-    # Build KD-tree from ShakeMap grid
-    grid_coords = shakemap[["LAT", "LON"]].values
-    tree = cKDTree(grid_coords)
+    from src.interpolation import interpolate_im
 
-    bridge_coords = nbi[["latitude", "longitude"]].values
-    _, indices = tree.query(bridge_coords)
+    grid_lats = shakemap["LAT"].values
+    grid_lons = shakemap["LON"].values
+    bridge_lats = nbi["latitude"].values
+    bridge_lons = nbi["longitude"].values
 
-    # Assign ALL available IMs from ShakeMap
+    # Assign ALL available IMs from ShakeMap using configured interpolation
     for im_name, sm_col in IM_COLUMN_MAP.items():
         if sm_col in shakemap.columns:
-            nbi[f"im_{im_name}"] = shakemap[sm_col].values[indices]
+            nbi[f"im_{im_name}"] = interpolate_im(
+                grid_lats, grid_lons, shakemap[sm_col].values,
+                bridge_lats, bridge_lons,
+                method=config.interpolation_method,
+                **config.interpolation_params,
+            )
 
     # Select the configured IM for fragility analysis
-    im_col = config.im_column
-    nbi["im_selected"] = shakemap[im_col].values[indices]
+    im_col_name = f"im_{config.im_type}"
+    nbi["im_selected"] = nbi[im_col_name] if im_col_name in nbi.columns else 0.0
 
     # Also keep legacy aliases for backward compatibility
-    if "PSA10" in shakemap.columns:
-        nbi["sa_10"] = shakemap["PSA10"].values[indices]
-    if "PGA" in shakemap.columns:
-        nbi["pga"] = shakemap["PGA"].values[indices]
+    if "im_SA10" in nbi.columns:
+        nbi["sa_10"] = nbi["im_SA10"]
+    if "im_PGA" in nbi.columns:
+        nbi["pga"] = nbi["im_PGA"]
 
     print(f"  Bridges with IM assigned: {nbi['im_selected'].notna().sum()}")
     print(f"  {config.im_type} at bridge sites: "

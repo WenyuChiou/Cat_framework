@@ -36,8 +36,16 @@ class AnalysisConfig:
     design_era: Optional[str] = None          # "conventional" or "seismic"
     material_filter: Optional[list[str]] = None
 
-    # Intensity Measure
+    # IM source
+    im_source: str = "shakemap"        # "shakemap" or "gmpe"
     im_type: str = "SA10"
+
+    # Spatial interpolation
+    interpolation_method: str = "nearest"
+    interpolation_params: dict[str, Any] = field(default_factory=dict)
+
+    # GMPE scenario (when im_source == "gmpe")
+    gmpe_scenario: Optional[dict[str, Any]] = None
 
     # Fragility overrides
     fragility_overrides: dict[str, dict] = field(default_factory=dict)
@@ -125,14 +133,34 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
         if val:
             cfg.material_filter = val if isinstance(val, list) else [val]
 
+    # IM source
+    if "im_source" in raw:
+        src = raw["im_source"].lower()
+        if src in ("shakemap", "gmpe"):
+            cfg.im_source = src
+        else:
+            print(f"[Config] Unknown im_source '{src}', using 'shakemap'.")
+
     # IM type
     if "im_type" in raw:
-        im = raw["im_type"].upper()
+        im = str(raw["im_type"]).upper()
         if im in IM_COLUMN_MAP:
             cfg.im_type = im
         else:
             print(f"[Config] Unknown im_type '{raw['im_type']}', "
                   f"using SA10. Valid: {list(IM_COLUMN_MAP.keys())}")
+
+    # Interpolation
+    interp = raw.get("interpolation", {})
+    if isinstance(interp, dict):
+        cfg.interpolation_method = interp.get("method", "nearest")
+        cfg.interpolation_params = {
+            k: v for k, v in interp.items() if k != "method"
+        }
+
+    # GMPE scenario
+    if "gmpe_scenario" in raw and isinstance(raw["gmpe_scenario"], dict):
+        cfg.gmpe_scenario = raw["gmpe_scenario"]
 
     # Fragility overrides
     if "fragility_overrides" in raw and isinstance(raw["fragility_overrides"], dict):
@@ -176,7 +204,20 @@ def print_config_summary(cfg: AnalysisConfig) -> None:
     if cfg.material_filter:
         print(f"  Material Filter: {cfg.material_filter}")
 
+    print(f"  IM Source: {cfg.im_source}")
     print(f"  IM Type: {cfg.im_type} (ShakeMap column: {cfg.im_column})")
+    print(f"  Interpolation: {cfg.interpolation_method}")
+    if cfg.interpolation_params:
+        print(f"    Params: {cfg.interpolation_params}")
+
+    if cfg.im_source == "gmpe":
+        if cfg.gmpe_scenario:
+            s = cfg.gmpe_scenario
+            print(f"  GMPE Scenario: Mw={s.get('Mw')}, "
+                  f"({s.get('lat')}, {s.get('lon')}), "
+                  f"depth={s.get('depth_km')}km")
+        else:
+            print("  ⚠ im_source=gmpe but no gmpe_scenario defined!")
 
     if cfg.im_type != "SA10":
         print("  ⚠ WARNING: Hazus fragility params are calibrated for Sa(1.0s).")
