@@ -441,7 +441,12 @@ def _parse_nbi_coord(series: pd.Series) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 
-def classify_nbi_to_hazus(nbi_df: pd.DataFrame) -> pd.DataFrame:
+def classify_nbi_to_hazus(
+    nbi_df: pd.DataFrame,
+    hwb_filter: list[str] | None = None,
+    design_era_filter: str | None = None,
+    material_filter: list[str] | None = None,
+) -> pd.DataFrame:
     """
     Add Hazus bridge class (HWB) column to NBI DataFrame.
 
@@ -452,11 +457,19 @@ def classify_nbi_to_hazus(nbi_df: pd.DataFrame) -> pd.DataFrame:
     ----------
     nbi_df : pd.DataFrame
         Parsed NBI data from parse_nbi().
+    hwb_filter : list[str], optional
+        If provided, keep only bridges matching these HWB classes
+        (e.g. ["HWB5", "HWB17"]).
+    design_era_filter : str, optional
+        "conventional" (pre-1975) or "seismic" (post-1975).
+    material_filter : list[str], optional
+        If provided, keep only bridges matching these materials
+        (e.g. ["concrete", "steel"]).
 
     Returns
     -------
     pd.DataFrame
-        Same DataFrame with added 'hwb_class' column.
+        Same DataFrame with added 'hwb_class' column, filtered as requested.
     """
     from .bridge_classes import classify_bridge
 
@@ -508,6 +521,25 @@ def classify_nbi_to_hazus(nbi_df: pd.DataFrame) -> pd.DataFrame:
 
     nbi_df = nbi_df.copy()
     nbi_df["hwb_class"] = nbi_df.apply(_row_to_hwb, axis=1)
+
+    # ── Apply optional filters ────────────────────────────────────────
+    n_before = len(nbi_df)
+
+    if hwb_filter:
+        nbi_df = nbi_df[nbi_df["hwb_class"].isin(hwb_filter)].copy()
+
+    if design_era_filter == "conventional":
+        nbi_df = nbi_df[nbi_df["year_built"] < 1975].copy()
+    elif design_era_filter == "seismic":
+        nbi_df = nbi_df[nbi_df["year_built"] >= 1975].copy()
+
+    if material_filter:
+        nbi_df = nbi_df[nbi_df["material"].isin(material_filter)].copy()
+
+    if n_before != len(nbi_df):
+        print(f"  [Filter] {n_before} → {len(nbi_df)} bridges after filtering")
+
+    nbi_df.reset_index(drop=True, inplace=True)
     return nbi_df
 
 

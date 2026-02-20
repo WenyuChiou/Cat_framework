@@ -244,6 +244,34 @@ def portfolio_summary(portfolio: list[BridgeExposure]) -> dict:
     }
 
 
+def filter_portfolio(
+    portfolio: list[BridgeExposure],
+    hwb_classes: list[str] | None = None,
+    materials: list[str] | None = None,
+) -> list[BridgeExposure]:
+    """
+    Filter a portfolio by HWB class and/or material type.
+
+    Parameters
+    ----------
+    portfolio : list[BridgeExposure]
+    hwb_classes : list[str], optional
+        Keep only bridges with these HWB classes.
+    materials : list[str], optional
+        Keep only bridges with these materials.
+
+    Returns
+    -------
+    list[BridgeExposure]
+    """
+    result = portfolio
+    if hwb_classes:
+        result = [b for b in result if b.hwb_class in hwb_classes]
+    if materials:
+        result = [b for b in result if b.material in materials]
+    return result
+
+
 def portfolio_to_sites(portfolio: list[BridgeExposure]) -> list[SiteParams]:
     """Convert portfolio to list of SiteParams for hazard computation."""
     return [

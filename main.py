@@ -89,7 +89,12 @@ def run_fragility_analysis():
     _run_verification(im_values)
 
 
-def run_data_analysis():
+def run_data_analysis(
+    hwb_filter=None,
+    material_filter=None,
+    design_era=None,
+    bbox=None,
+):
     """Load real data and run integrated analysis."""
     from src.data_loader import (
         load_shakemap,
@@ -103,6 +108,19 @@ def run_data_analysis():
     print("Loading Real Data for Northridge Analysis")
     print("=" * 60)
     print()
+
+    # Print active filters
+    if any([hwb_filter, material_filter, design_era, bbox]):
+        print("[Filters] Active analysis filters:")
+        if hwb_filter:
+            print(f"  HWB Classes: {hwb_filter}")
+        if material_filter:
+            print(f"  Materials: {material_filter}")
+        if design_era:
+            print(f"  Design Era: {design_era}")
+        if bbox:
+            print(f"  Bounding Box: lat[{bbox[0]},{bbox[1]}] lon[{bbox[2]},{bbox[3]}]")
+        print()
 
     # --- ShakeMap ---
     shakemap_path = DATA_DIR / "grid.xml"
@@ -144,7 +162,14 @@ def run_data_analysis():
     if nbi_files:
         nbi_path = nbi_files[0]
         print(f"[NBI] Loading {nbi_path.name}...")
-        nbi = load_nbi(nbi_path)
+        # Build custom bounding box if specified
+        nbi_bbox = None
+        if bbox:
+            nbi_bbox = {
+                "lat_min": bbox[0], "lat_max": bbox[1],
+                "lon_min": bbox[2], "lon_max": bbox[3],
+            }
+        nbi = load_nbi(nbi_path, northridge_bbox=nbi_bbox)
         print(f"  Bridges in Northridge area: {len(nbi):,}")
         if len(nbi) > 0:
             print(f"  Year built range: {int(nbi['year_built'].min())} – {int(nbi['year_built'].max())}")
@@ -152,7 +177,12 @@ def run_data_analysis():
 
             # Classify into Hazus bridge classes
             print("\n[NBI] Classifying bridges into Hazus classes...")
-            nbi = classify_nbi_to_hazus(nbi)
+            nbi = classify_nbi_to_hazus(
+                nbi,
+                hwb_filter=hwb_filter,
+                design_era_filter=design_era,
+                material_filter=material_filter,
+            )
             hwb_counts = nbi["hwb_class"].value_counts().sort_index()
             print("  HWB class distribution:")
             for hwb, count in hwb_counts.items():
@@ -421,7 +451,14 @@ def run_probabilistic_analysis(
 
 # ── Automated Workflows ──────────────────────────────────────────────────
 
-def run_full_analysis(event_id: str = "ci3144585", overwrite: bool = False):
+def run_full_analysis(
+    event_id: str = "ci3144585",
+    overwrite: bool = False,
+    hwb_filter=None,
+    material_filter=None,
+    design_era=None,
+    bbox=None,
+):
     """Run the complete automated end-to-end analysis pipeline."""
     print("\n" + "="*60)
     print("  CAT411 — STARTING FULL AUTOMATED ANALYSIS")
@@ -434,7 +471,12 @@ def run_full_analysis(event_id: str = "ci3144585", overwrite: bool = False):
     
     # 2. Run Analysis & Generate Maps
     print("\n[Step 2/3] Processing Data & Computing Risks...")
-    run_data_analysis()
+    run_data_analysis(
+        hwb_filter=hwb_filter,
+        material_filter=material_filter,
+        design_era=design_era,
+        bbox=bbox,
+    )
     
     # 3. Generate Fragility Library
     print("\n[Step 3/3] Generating Fragility Curve Library Reference...")
@@ -543,6 +585,37 @@ def main():
         action="store_true",
         help="Overwrite existing downloaded files",
     )
+
+    # ── Focused analysis filters ──────────────────────────────────────
+    parser.add_argument(
+        "--hwb-filter",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Filter to specific HWB classes (e.g. --hwb-filter HWB5 HWB17)",
+    )
+    parser.add_argument(
+        "--material-filter",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Filter to specific materials (e.g. --material-filter concrete steel)",
+    )
+    parser.add_argument(
+        "--design-era",
+        type=str,
+        choices=["conventional", "seismic"],
+        default=None,
+        help="Filter by design era (conventional=pre-1975, seismic=post-1975)",
+    )
+    parser.add_argument(
+        "--bbox",
+        type=float,
+        nargs=4,
+        metavar=("LAT_MIN", "LAT_MAX", "LON_MIN", "LON_MAX"),
+        default=None,
+        help="Custom bounding box (e.g. --bbox 34.0 34.5 -118.8 -118.2)",
+    )
     args = parser.parse_args()
 
     if args.interactive:
@@ -550,7 +623,14 @@ def main():
         return
 
     if args.full_analysis:
-        run_full_analysis(event_id=args.hazard_event, overwrite=args.overwrite)
+        run_full_analysis(
+            event_id=args.hazard_event,
+            overwrite=args.overwrite,
+            hwb_filter=args.hwb_filter,
+            material_filter=args.material_filter,
+            design_era=args.design_era,
+            bbox=args.bbox,
+        )
         return
 
     if args.download_hazard:
@@ -560,7 +640,12 @@ def main():
             overwrite=args.overwrite,
         )
         print("\n[Pipeline] Hazard data download complete. Running data processing...")
-        run_data_analysis()
+        run_data_analysis(
+            hwb_filter=args.hwb_filter,
+            material_filter=args.material_filter,
+            design_era=args.design_era,
+            bbox=args.bbox,
+        )
         return
 
     if args.probabilistic:
