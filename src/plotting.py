@@ -31,9 +31,17 @@ DS_LINESTYLES = {
 }
 
 
-def _setup_axes(ax: plt.Axes, title: str) -> None:
+IM_LABEL_MAP = {
+    "PGA": "PGA [g]",
+    "SA03": "Sa(0.3s) [g]",
+    "SA10": "Sa(1.0s) [g]",
+    "SA30": "Sa(3.0s) [g]",
+}
+
+
+def _setup_axes(ax: plt.Axes, title: str, im_type: str = "SA10") -> None:
     """Apply consistent formatting to axes."""
-    ax.set_xlabel("Sa(1.0s) [g]", fontsize=12)
+    ax.set_xlabel(IM_LABEL_MAP.get(im_type, "Sa(1.0s) [g]"), fontsize=12)
     ax.set_ylabel("P(Exceedance)", fontsize=12)
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.set_xlim(0, 2.5)
@@ -200,7 +208,7 @@ def plot_damage_distribution(
         bottom += vals
 
     bridge_name = HAZUS_BRIDGE_FRAGILITY[hwb_class]["name"]
-    ax.set_xlabel("Sa(1.0s) [g]", fontsize=12)
+    ax.set_xlabel(IM_LABEL_MAP.get("SA10", "Sa(1.0s) [g]"), fontsize=12)
     ax.set_ylabel("Probability", fontsize=12)
     ax.set_title(
         f"Damage State Distribution — {hwb_class}: {bridge_name}",
@@ -297,25 +305,29 @@ def plot_ground_motion_field(
     scenario=None,
     output_dir: str = "output",
     filename: str = "ground_motion_field.png",
+    im_type: str = "SA10",
 ) -> str:
     """
-    Scatter map of Sa(1.0s) at bridge sites, colored by intensity.
+    Scatter map of IM at bridge sites, colored by intensity.
 
     Parameters
     ----------
     sites : list of objects with .lat, .lon attributes
     sa_values : np.ndarray
-        Sa(1.0s) in g at each site.
+        IM values in g at each site.
     scenario : EarthquakeScenario, optional
         If provided, marks the epicenter.
     output_dir : str
     filename : str
+    im_type : str
+        IM type label for axis/title (e.g. "SA10", "PGA").
 
     Returns
     -------
     str
         Path to saved figure.
     """
+    im_label = IM_LABEL_MAP.get(im_type, "Sa(1.0s) [g]")
     lats = [s.lat for s in sites]
     lons = [s.lon for s in sites]
 
@@ -326,7 +338,7 @@ def plot_ground_motion_field(
         vmin=0, vmax=max(0.5, np.percentile(sa_values, 95)),
     )
     cbar = fig.colorbar(sc, ax=ax, shrink=0.8)
-    cbar.set_label("Sa(1.0s) [g]", fontsize=11)
+    cbar.set_label(im_label, fontsize=11)
 
     if scenario is not None:
         ax.plot(scenario.lon, scenario.lat, "r*", markersize=18,
@@ -335,7 +347,8 @@ def plot_ground_motion_field(
 
     ax.set_xlabel("Longitude", fontsize=12)
     ax.set_ylabel("Latitude", fontsize=12)
-    title = "Ground Motion Field — Sa(1.0s)"
+    im_short = im_label.split(" [")[0]
+    title = f"Ground Motion Field — {im_short}"
     if scenario is not None:
         title += f" | Mw {scenario.Mw:.1f}"
     ax.set_title(title, fontsize=13, fontweight="bold")
@@ -679,8 +692,9 @@ def plot_analysis_summary(
     sa_vals = stats_dict.get("sa_values", [])
     if len(sa_vals) > 0:
         axes[1,0].hist(sa_vals, bins=20, color="gray", alpha=0.7, edgecolor="black")
+        _im_label = IM_LABEL_MAP.get(stats_dict.get("im_type", "SA10"), "Sa(1.0s) [g]")
         axes[1,0].set_title("Ground Motion Intensity Histogram")
-        axes[1,0].set_xlabel("Sa(1.0s) [g]")
+        axes[1,0].set_xlabel(_im_label)
         axes[1,0].set_ylabel("Frequency")
 
     # 4. Bridge Class Breakdown (Ax 1,1)

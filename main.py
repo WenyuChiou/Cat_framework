@@ -16,9 +16,10 @@ import sys
 import subprocess
 
 import numpy as np
+import pandas as pd
 
 from src.hazus_params import HAZUS_BRIDGE_FRAGILITY, DAMAGE_STATE_ORDER
-from src.fragility import compute_all_curves, damage_state_probabilities
+from src.fragility import compute_all_curves, damage_state_probabilities, apply_skew_modification
 from src.plotting import (
     plot_single_class,
     plot_comparison,
@@ -127,7 +128,7 @@ def run_data_analysis(
         }
 
     print("=" * 60)
-    print("Loading Real Data for Northridge Analysis")
+    print("Loading Real Data for Seismic Risk Analysis")
     print("=" * 60)
     print()
     print_config_summary(config)
@@ -172,13 +173,14 @@ def run_data_analysis(
         stations = None
 
     # --- NBI ---
-    nbi_files = list(DATA_DIR.glob("CA*.txt")) if DATA_DIR.exists() else []
+    # Search for any state NBI file (e.g. CA24.txt, TX24.txt, NY24.txt)
+    nbi_files = sorted(DATA_DIR.glob("[A-Z][A-Z]*.txt")) if DATA_DIR.exists() else []
     if nbi_files:
         nbi_path = nbi_files[0]
         print(f"[NBI] Loading {nbi_path.name}...")
         nbi_bbox = config.bbox_dict
         nbi = load_nbi(nbi_path, northridge_bbox=nbi_bbox)
-        print(f"  Bridges in Northridge area: {len(nbi):,}")
+        print(f"  Bridges in region: {len(nbi):,}")
         if len(nbi) > 0:
             print(f"  Year built range: {int(nbi['year_built'].min())} – {int(nbi['year_built'].max())}")
             print(f"  Materials: {nbi['material'].value_counts().to_dict()}")
@@ -225,7 +227,7 @@ def run_data_analysis(
                 from src.exposure import SiteParams
                 bridge_sites = [SiteParams(lat=r["latitude"], lon=r["longitude"]) for _, r in nbi.iterrows()]
                 im_vals = nbi["im_selected"].values if "im_selected" in nbi.columns else nbi["sa_10"].values
-                path_gm = plot_ground_motion_field(bridge_sites, im_vals, output_dir=OUTPUT_ANALYSIS, filename="03_bridge_site_ground_motion.png")
+                path_gm = plot_ground_motion_field(bridge_sites, im_vals, output_dir=OUTPUT_ANALYSIS, filename="03_bridge_site_ground_motion.png", im_type=config.im_type)
                 print(f"  Saved: {path_gm}")
                 
                 # 4. Plot specific damage map
@@ -251,8 +253,13 @@ def run_data_analysis(
                 
                 total_loss = nbi["expected_loss"].sum() if "expected_loss" in nbi.columns else 0
                 
+                # Read event info from ShakeMap metadata (fallback to generic)
+                _event_id = sm.attrs.get("event_id", "unknown")
+                _event_desc = sm.attrs.get("event_description", "")
+                _event_label = f"{_event_desc} ({_event_id})" if _event_desc else _event_id
+
                 stats_dict = {
-                    "event_id": "Northridge (ci3144585)",
+                    "event_id": _event_label,
                     "total_bridges": len(nbi),
                     "max_pga": sm["PGA"].max() if "PGA" in sm.columns else 0,
                     "avg_sa": nbi["im_selected"].mean() if "im_selected" in nbi.columns else 0,
@@ -272,21 +279,22 @@ def run_data_analysis(
                 
         print()
     else:
-        print(f"[NBI] No CA*.txt found in {DATA_DIR}")
-        print("  Run: python main.py --download")
+        print(f"[NBI] No NBI file ([A-Z][A-Z]*.txt) found in {DATA_DIR}")
+        print("  Place a state NBI file (e.g. CA24.txt, TX24.txt) in the data/ directory.")
         nbi = None
 
     return sm, stations, nbi
 
 
-def _calibrated_damage_probs(im_val: float, hwb_class: str, cal_factor: float) -> dict:
-    """Compute damage probs with calibrated fragility medians.
+def _calibrated_damage_probs(im_val: float, hwb_class: str, cal_factor: float, skew_angle: float = 0.0) -> dict:
+    """Compute damage probs with calibrated fragility medians and skew.
 
     Multiplies all Hazus medians by cal_factor before computing.
     factor < 1.0 → more vulnerable, factor > 1.0 → less vulnerable.
+    Applies Hazus skew modification if skew_angle > 0.
     """
     import numpy as np
-    from src.fragility import fragility_curve
+    from src.fragility import fragility_curve, apply_skew_modification
     from src.hazus_params import HAZUS_BRIDGE_FRAGILITY, DAMAGE_STATE_ORDER
 
     params = HAZUS_BRIDGE_FRAGILITY.get(hwb_class)
@@ -298,6 +306,8 @@ def _calibrated_damage_probs(im_val: float, hwb_class: str, cal_factor: float) -
     exceed = {}
     for ds in DAMAGE_STATE_ORDER:
         med = ds_params[ds]["median"] * cal_factor
+        if skew_angle > 0:
+            med = apply_skew_modification(med, skew_angle)
         beta = ds_params[ds]["beta"]
         exceed[ds] = float(fragility_curve(np.array([im_val]), med, beta)[0])
 
@@ -327,6 +337,13 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
 
     if config is None:
         config = AnalysisConfig()
+
+    if config.im_source == "gmpe":
+        raise NotImplementedError(
+            "im_source='gmpe' is not yet supported in the data analysis pipeline. "
+            "Please use im_source='shakemap' (requires downloaded ShakeMap data) "
+            "or use --pipeline / --probabilistic modes for GMPE-based analysis."
+        )
 
     print(f"\n[Analysis] Assigning ground motion to bridges "
           f"(IM: {config.im_type}, interpolation: {config.interpolation_method})...")
@@ -383,9 +400,13 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
 
     ds_cols = ["P_none", "P_slight", "P_moderate", "P_extensive", "P_complete"]
 
+    # Check if skew angle data is available
+    has_skew = "skew_angle" in nbi.columns
+
     for _, row in nbi.iterrows():
         im_val = row["im_selected"]
         hwb = row["hwb_class"]
+        skew = float(row["skew_angle"]) if has_skew and pd.notna(row.get("skew_angle")) else 0.0
 
         # Use overridden fragility if available, otherwise default
         if hwb in config.fragility_overrides:
@@ -403,6 +424,9 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
                     # Apply calibration
                     cal = config.class_factors.get(hwb, config.global_median_factor)
                     med *= cal
+                    # Apply skew modification (reduces median for skewed bridges)
+                    if skew > 0:
+                        med = apply_skew_modification(med, skew)
                     exceed[ds] = float(fragility_curve(np.array([im_val]), med, beta)[0])
                 else:
                     exceed[ds] = 0.0
@@ -418,9 +442,9 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
             # Default Hazus fragility, with optional calibration
             if has_calibration:
                 cal_factor = config.class_factors.get(hwb, config.global_median_factor)
-                probs = _calibrated_damage_probs(im_val, hwb, cal_factor)
+                probs = _calibrated_damage_probs(im_val, hwb, cal_factor, skew)
             else:
-                probs = damage_state_probabilities(im_val, hwb)
+                probs = _calibrated_damage_probs(im_val, hwb, 1.0, skew) if skew > 0 else damage_state_probabilities(im_val, hwb)
 
         for ds_key, col in zip(
             ["none", "slight", "moderate", "extensive", "complete"], ds_cols

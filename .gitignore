@@ -4,10 +4,10 @@ __pycache__/
 *.pyo
 
 # Generated outputs (re-created by running main.py)
-output/*.png
-output/*.csv
+output/
 
 # Data files (large, downloaded via --download)
+data/plots/
 data/grid.xml
 data/stationlist.json
 data/CA24.txt
@@ -38,3 +38,7 @@ ref/
 # OS
 .DS_Store
 nul
+
+# Temporary scripts
+update_docx.py
+generate_docx.py

@@ -91,14 +91,14 @@ def parse_shakemap_grid(filepath: Union[str, Path]) -> pd.DataFrame:
     for col in pct_g_cols:
         df[col] = df[col] / 100.0
 
-    # Extract event metadata from root attributes
+    # Extract event metadata from root attributes (no silent defaults)
     event_attrs = root.attrib
-    df.attrs["event_id"] = event_attrs.get("event_id", "ci3144585")
-    df.attrs["magnitude"] = float(event_attrs.get("magnitude", 6.7))
-    df.attrs["lat"] = float(event_attrs.get("lat", 34.213))
-    df.attrs["lon"] = float(event_attrs.get("lon", -118.537))
+    df.attrs["event_id"] = event_attrs.get("event_id", "unknown")
+    df.attrs["magnitude"] = float(event_attrs.get("magnitude", 0.0))
+    df.attrs["lat"] = float(event_attrs.get("lat", 0.0))
+    df.attrs["lon"] = float(event_attrs.get("lon", 0.0))
     df.attrs["event_description"] = event_attrs.get(
-        "event_description", "Northridge, California"
+        "event_description", ""
     )
 
     return df
@@ -308,23 +308,16 @@ def parse_nbi(
             df_raw[col_map["condition"]], errors="coerce"
         )
 
-    # Filter to bounding box if requested
-    if northridge_bbox is None:
-        northridge_bbox = {
-            "lat_min": 33.7,
-            "lat_max": 34.8,
-            "lon_min": -119.0,
-            "lon_max": -117.5,
-        }
-
-    mask = (
-        (df["latitude"] >= northridge_bbox["lat_min"])
-        & (df["latitude"] <= northridge_bbox["lat_max"])
-        & (df["longitude"] >= northridge_bbox["lon_min"])
-        & (df["longitude"] <= northridge_bbox["lon_max"])
-    )
-    df = df.loc[mask].copy()
-    df.reset_index(drop=True, inplace=True)
+    # Filter to bounding box if provided; otherwise return all bridges
+    if northridge_bbox is not None:
+        mask = (
+            (df["latitude"] >= northridge_bbox["lat_min"])
+            & (df["latitude"] <= northridge_bbox["lat_max"])
+            & (df["longitude"] >= northridge_bbox["lon_min"])
+            & (df["longitude"] <= northridge_bbox["lon_max"])
+        )
+        df = df.loc[mask].copy()
+        df.reset_index(drop=True, inplace=True)
 
     return df
 
