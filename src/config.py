@@ -147,8 +147,10 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
         if im in IM_COLUMN_MAP:
             cfg.im_type = im
         else:
-            print(f"[Config] Unknown im_type '{raw['im_type']}', "
-                  f"using SA10. Valid: {list(IM_COLUMN_MAP.keys())}")
+            raise ValueError(
+                f"Unknown im_type '{raw['im_type']}'. "
+                f"Valid options: {list(IM_COLUMN_MAP.keys())}"
+            )
 
     # Interpolation
     interp = raw.get("interpolation", {})
@@ -179,7 +181,30 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
         cfg.n_events = analysis.get("n_events", 50)
         cfg.seed = analysis.get("seed", 42)
 
+    validate_config(cfg)
+
     return cfg
+
+
+def validate_config(cfg: AnalysisConfig) -> None:
+    """
+    Validate configuration for internal consistency.
+
+    Raises ValueError for invalid combinations. Call this after any
+    mutation of the config object (e.g., CLI overrides).
+    """
+    if cfg.im_type not in IM_COLUMN_MAP:
+        raise ValueError(
+            f"Unknown im_type '{cfg.im_type}'. "
+            f"Valid options: {list(IM_COLUMN_MAP.keys())}"
+        )
+    if cfg.im_type != "SA10" and not cfg.fragility_overrides:
+        raise ValueError(
+            f"Configuration error: im_type='{cfg.im_type}' but no fragility_overrides "
+            f"provided. Default Hazus fragility parameters are calibrated for Sa(1.0s) "
+            f"only. Either set im_type: SA10 or provide fragility_overrides with "
+            f"parameters calibrated for {cfg.im_type}."
+        )
 
 
 def print_config_summary(cfg: AnalysisConfig) -> None:
@@ -220,9 +245,12 @@ def print_config_summary(cfg: AnalysisConfig) -> None:
             print("  ⚠ im_source=gmpe but no gmpe_scenario defined!")
 
     if cfg.im_type != "SA10":
-        print("  ⚠ WARNING: Hazus fragility params are calibrated for Sa(1.0s).")
-        print("    Results with other IMs may be inaccurate unless you provide")
-        print("    fragility_overrides in config.yaml.")
+        if cfg.fragility_overrides:
+            print(f"  NOTE: im_type='{cfg.im_type}' with user-supplied fragility_overrides.")
+        else:
+            # This should not be reachable if validate_config() was called,
+            # but print a warning just in case.
+            print(f"  !! WARNING: im_type='{cfg.im_type}' without fragility_overrides.")
 
     if cfg.fragility_overrides:
         print(f"  Fragility Overrides: {list(cfg.fragility_overrides.keys())}")

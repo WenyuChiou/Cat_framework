@@ -14,6 +14,7 @@ import argparse
 import os
 import sys
 import subprocess
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -367,7 +368,24 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
 
     # Select the configured IM for fragility analysis
     im_col_name = f"im_{config.im_type}"
-    nbi["im_selected"] = nbi[im_col_name] if im_col_name in nbi.columns else 0.0
+    if im_col_name not in nbi.columns:
+        available = [c[3:] for c in nbi.columns if c.startswith("im_")]
+        raise ValueError(
+            f"Configured IM type '{config.im_type}' not found in ShakeMap data. "
+            f"Available IMs: {available}. Check that the ShakeMap grid.xml contains "
+            f"the column '{IM_COLUMN_MAP.get(config.im_type, '?')}' or change "
+            f"im_type in your config file."
+        )
+    nbi["im_selected"] = nbi[im_col_name]
+    n_zero = (nbi["im_selected"] <= 0).sum()
+    if n_zero > 0:
+        warnings.warn(
+            f"{n_zero} of {len(nbi)} bridges have IM <= 0.0g after interpolation. "
+            f"These bridges will show zero damage probability. Check that all bridges "
+            f"fall within the ShakeMap spatial extent.",
+            RuntimeWarning,
+            stacklevel=1,
+        )
 
     # Also keep legacy aliases for backward compatibility
     if "im_SA10" in nbi.columns:
@@ -813,12 +831,13 @@ def main():
     args = parser.parse_args()
 
     # Load config file and merge CLI overrides
-    from src.config import load_config
+    from src.config import load_config, validate_config
     cfg = load_config(args.config)
 
-    # CLI im-type overrides config
+    # CLI im-type overrides config — re-validate after mutation
     if args.im_type:
         cfg.im_type = args.im_type
+        validate_config(cfg)
 
     # CLI nbi-filter merges into bridge_selection
     if args.nbi_filter:
