@@ -477,11 +477,284 @@ def main():
         pass  # Google Drive sync lock — harmless
 
     # Generate
-    print(f"\n[3/3] Generating maps...")
+    print(f"\n[3/3] Generating outputs...")
     plot_combined_map(sm, scenario_data, im_type, OUT_DIR)
     plot_conditions_table(scenario_data, im_type, OUT_DIR)
+    generate_word_report(scenario_data, im_type, OUT_DIR)
 
     print(f"\nDone! Output: {OUT_DIR.relative_to(ROOT)}/")
+
+
+# ── Word Report ──────────────────────────────────────────────────
+
+def generate_word_report(scenario_data, im_type, out_dir):
+    """Generate Word report with map, conditions table, and config reference."""
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
+    doc = Document()
+
+    # Page setup — A4 landscape
+    for section in doc.sections:
+        section.page_width = Cm(29.7)
+        section.page_height = Cm(21.0)
+        section.left_margin = Cm(2.0)
+        section.right_margin = Cm(2.0)
+        section.top_margin = Cm(2.0)
+        section.bottom_margin = Cm(1.5)
+
+    # ── Title ──
+    title = doc.add_heading("CAT411 — Multi-Scenario Analysis Report", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p = doc.add_paragraph(
+        "Weekly Report W1 (2026-02-24)  |  1994 Northridge Earthquake (Mw 6.7)  |  Sa(1.0s) ShakeMap"
+    )
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph("")
+
+    # ── Map ──
+    doc.add_heading("1. Multi-Scenario Comparison Map", level=1)
+    map_path = out_dir / "map_multi_scenario.png"
+    if map_path.exists():
+        doc.add_picture(str(map_path), width=Cm(25))
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph("")
+
+    # ── Conditions Table ──
+    doc.add_heading("2. Analysis Conditions & Results", level=1)
+
+    headers = ["ID", "Scenario", "Region (Lat)", "Region (Lon)",
+               "Filters", "Bridges", "Mean Sa [g]", "Max Sa [g]",
+               "P(Mod+)", "P(Comp)"]
+
+    id_colors_hex = {"A": "1565C0", "B": "E65100", "C": "C62828", "D": "2E7D32"}
+
+    rows = []
+    for sc, nbi in scenario_data:
+        r = sc["region"]
+        filters = []
+        if sc["filters"]:
+            for k, v in sc["filters"].items():
+                filters.append(f"{k}={v}")
+        if sc["design_era"]:
+            filters.append(f"era={sc['design_era']}")
+        if sc["hwb_filter"]:
+            filters.append(f"hwb={','.join(sc['hwb_filter'])}")
+        filter_str = "; ".join(filters) if filters else "(none)"
+        p_mod = nbi[["P_moderate", "P_extensive", "P_complete"]].sum(axis=1).mean()
+        p_comp = nbi["P_complete"].mean()
+        rows.append([
+            sc["id"], sc["label"],
+            f"{r['lat_min']:.2f} – {r['lat_max']:.2f}",
+            f"{r['lon_min']:.1f} – {r['lon_max']:.1f}",
+            filter_str, f"{len(nbi):,}",
+            f"{nbi['im_selected'].mean():.4f}",
+            f"{nbi['im_selected'].max():.4f}",
+            f"{p_mod:.1%}", f"{p_comp:.1%}",
+        ])
+
+    table = doc.add_table(rows=1 + len(rows), cols=len(headers))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.style = "Table Grid"
+
+    # Header row
+    for j, h in enumerate(headers):
+        cell = table.rows[0].cells[j]
+        cell.text = ""
+        run = cell.paragraphs[0].add_run(h)
+        run.bold = True
+        run.font.size = Pt(9)
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        shading = cell._element.get_or_add_tcPr()
+        shading.append(shading.makeelement(qn("w:shd"), {
+            qn("w:fill"): "1565C0", qn("w:val"): "clear"}))
+
+    # Data rows
+    for i, row_data in enumerate(rows):
+        for j, val in enumerate(row_data):
+            cell = table.rows[i + 1].cells[j]
+            cell.text = ""
+            run = cell.paragraphs[0].add_run(val)
+            run.font.size = Pt(9)
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if j == 0:
+                run.bold = True
+                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                shading = cell._element.get_or_add_tcPr()
+                shading.append(shading.makeelement(qn("w:shd"), {
+                    qn("w:fill"): id_colors_hex.get(val, "333333"),
+                    qn("w:val"): "clear"}))
+            elif i % 2 == 0:
+                shading = cell._element.get_or_add_tcPr()
+                shading.append(shading.makeelement(qn("w:shd"), {
+                    qn("w:fill"): "F5F5F5", qn("w:val"): "clear"}))
+
+    doc.add_paragraph("")
+
+    # ── Key Observations ──
+    doc.add_heading("3. Key Observations", level=1)
+    obs = [
+        "Scenario C (Epicenter Zone) shows 52.7% P(Moderate+), ~3x the baseline, "
+        "due to 2x higher mean Sa (0.73g vs 0.32g).",
+        "Pre-1975 conventional bridges (B) have slightly higher vulnerability "
+        "than the full population at comparable IM levels.",
+        "Concrete multi-span HWB5/HWB7 classes (D) show 23.4% P(Moderate+), "
+        "~30% above baseline, reflecting their lower fragility thresholds.",
+        "All scenarios share Max Sa = 1.26g, indicating the ShakeMap peak is "
+        "within the full study region.",
+    ]
+    for o in obs:
+        doc.add_paragraph(o, style="List Bullet")
+    doc.add_paragraph("")
+
+    # ── Supported Config Parameters (full reference) ──
+    doc.add_heading("4. Supported Configuration Parameters (config.yaml)", level=1)
+    p = doc.add_paragraph(
+        "The framework is fully driven by config.yaml. All parameters below are "
+        "optional; defaults are used when omitted. CLI flags (--im-type, --nbi-filter, "
+        "--bbox) override the corresponding YAML settings."
+    )
+    p.runs[0].font.size = Pt(9)
+
+    # Config reference table
+    cfg_headers = ["Section", "Parameter", "Type", "Default", "Description"]
+    cfg_rows = [
+        # Region
+        ["Region", "region.lat_min", "float", "33.8", "Southern boundary of study area (degrees)"],
+        ["", "region.lat_max", "float", "34.6", "Northern boundary of study area (degrees)"],
+        ["", "region.lon_min", "float", "-118.9", "Western boundary of study area (degrees)"],
+        ["", "region.lon_max", "float", "-118.0", "Eastern boundary of study area (degrees)"],
+        # Bridge Selection
+        ["Bridge\nSelection", "bridge_selection.county", "str", "(all)", "NBI county FIPS code, e.g. \"037\" for LA County"],
+        ["", "bridge_selection.year_built", "str", "(all)", "Numeric comparison, e.g. \">1960\", \"<=1990\""],
+        ["", "bridge_selection.material", "list[str]", "(all)", "Material filter, e.g. [\"concrete\", \"steel\"]"],
+        ["", "hwb_filter", "list[str]", "(all)", "Restrict to specific HWB classes, e.g. [\"HWB5\", \"HWB7\"]"],
+        ["", "design_era", "str", "(all)", "\"conventional\" (pre-1990) or \"seismic\" (post-1990)"],
+        ["", "material_filter", "list[str]", "(all)", "Top-level material filter (alternative to bridge_selection.material)"],
+        # IM Source
+        ["IM Source", "im_source", "str", "shakemap", "\"shakemap\" (from grid.xml) or \"gmpe\" (BA08 synthetic)"],
+        ["", "im_type", "str", "SA10", "PGA | SA03 | SA10 | SA30. Non-SA10 requires fragility_overrides"],
+        # Interpolation
+        ["Spatial\nInterpolation", "interpolation.method", "str", "nearest",
+         "nearest | idw | bilinear | natural_neighbor | kriging"],
+        ["", "interpolation.power", "float", "2.0", "IDW distance exponent (higher = more local)"],
+        ["", "interpolation.n_neighbors", "int", "8", "Number of nearby grid points (IDW, kriging)"],
+        ["", "interpolation.range_km", "float", "50.0", "Variogram range in km (kriging only)"],
+        ["", "interpolation.nugget", "float", "0.01", "Measurement noise (kriging only)"],
+        # GMPE
+        ["GMPE\nScenario", "gmpe_scenario.Mw", "float", "6.7", "Moment magnitude"],
+        ["", "gmpe_scenario.lat", "float", "34.213", "Epicenter latitude"],
+        ["", "gmpe_scenario.lon", "float", "-118.537", "Epicenter longitude"],
+        ["", "gmpe_scenario.depth_km", "float", "18.4", "Hypocentral depth (km)"],
+        ["", "gmpe_scenario.fault_type", "str", "reverse", "strike_slip | normal | reverse | unspecified"],
+        ["", "gmpe_scenario.vs30", "float", "760", "Default site Vs30 (m/s)"],
+        # Fragility
+        ["Fragility\nOverrides", "fragility_overrides.<HWB>.<ds>.median", "float", "Hazus 7.9",
+         "Override median Sa for a damage state (required if im_type != SA10)"],
+        ["", "fragility_overrides.<HWB>.<ds>.beta", "float", "0.6",
+         "Override lognormal dispersion for a damage state"],
+        # Calibration
+        ["Calibration", "calibration.global_median_factor", "float", "1.0",
+         "Scale all fragility medians. <1.0 = more vulnerable"],
+        ["", "calibration.class_factors.<HWB>", "float", "1.0",
+         "Per-class median scale factor (overrides global)"],
+        # Analysis
+        ["Analysis", "analysis.n_realizations", "int", "50", "Monte Carlo realizations per event"],
+        ["", "analysis.n_events", "int", "50", "Stochastic events for probabilistic mode"],
+        ["", "analysis.seed", "int", "42", "Random seed for reproducibility"],
+    ]
+
+    ct = doc.add_table(rows=1 + len(cfg_rows), cols=len(cfg_headers))
+    ct.alignment = WD_TABLE_ALIGNMENT.CENTER
+    ct.style = "Table Grid"
+
+    # Header
+    for j, h in enumerate(cfg_headers):
+        cell = ct.rows[0].cells[j]
+        cell.text = ""
+        run = cell.paragraphs[0].add_run(h)
+        run.bold = True
+        run.font.size = Pt(8.5)
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        shading = cell._element.get_or_add_tcPr()
+        shading.append(shading.makeelement(qn("w:shd"), {
+            qn("w:fill"): "37474F", qn("w:val"): "clear"}))
+
+    # Section colors
+    section_colors = {
+        "Region": "E3F2FD", "Bridge\nSelection": "FFF3E0",
+        "IM Source": "E8F5E9", "Spatial\nInterpolation": "F3E5F5",
+        "GMPE\nScenario": "ECEFF1", "Fragility\nOverrides": "FBE9E7",
+        "Calibration": "FFFDE7", "Analysis": "E0F7FA",
+    }
+    current_section = ""
+    for i, row_data in enumerate(cfg_rows):
+        for j, val in enumerate(row_data):
+            cell = ct.rows[i + 1].cells[j]
+            cell.text = ""
+            run = cell.paragraphs[0].add_run(val)
+            run.font.size = Pt(8)
+            if j == 0 and val:
+                current_section = val
+                run.bold = True
+                run.font.size = Pt(8.5)
+            if j == 1:
+                run.font.name = "Consolas"
+            # Section background color
+            if j == 0 and val:
+                bg = section_colors.get(val, "FFFFFF")
+                shading = cell._element.get_or_add_tcPr()
+                shading.append(shading.makeelement(qn("w:shd"), {
+                    qn("w:fill"): bg, qn("w:val"): "clear"}))
+
+    doc.add_paragraph("")
+
+    # ── Validation Rules ──
+    doc.add_heading("5. Validation Rules", level=1)
+    rules = [
+        ("IM-Fragility Compatibility",
+         "If im_type is not SA10, fragility_overrides MUST be provided. "
+         "Default Hazus parameters are calibrated for Sa(1.0s) only. "
+         "Violation raises ValueError at config load time."),
+        ("IM Column Availability",
+         "If the configured IM type is not present in the ShakeMap grid.xml, "
+         "a ValueError is raised listing available IM columns."),
+        ("Zero-IM Warning",
+         "Bridges receiving IM <= 0.0g after interpolation trigger a RuntimeWarning. "
+         "This indicates potential spatial extent mismatch."),
+        ("Unknown IM Type",
+         "Unrecognized im_type values (e.g. typos like 'SA1.0') raise ValueError "
+         "immediately at config load time."),
+    ]
+    for rule_name, rule_desc in rules:
+        p = doc.add_paragraph()
+        run_b = p.add_run(f"{rule_name}: ")
+        run_b.bold = True
+        run_b.font.size = Pt(9)
+        run_d = p.add_run(rule_desc)
+        run_d.font.size = Pt(9)
+
+    doc.add_paragraph("")
+
+    # ── Footer ──
+    p = doc.add_paragraph()
+    run = p.add_run(
+        "Data: USGS ShakeMap (ci3144585) + FHWA NBI (2024)  |  "
+        "CRS: WGS 84  |  CAT411 Framework"
+    )
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    run.italic = True
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    path = out_dir / "scenario_report.docx"
+    doc.save(str(path))
+    print(f"  Saved: {path.name}")
 
 
 if __name__ == "__main__":
