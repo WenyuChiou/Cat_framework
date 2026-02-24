@@ -8,12 +8,19 @@ ShakeMap contour background and each scenario's bridges + region boundary.
 Also generates a conditions summary table as a separate figure.
 
 Usage:
-    python generate_report_maps.py
+    python scripts/generate_report_maps.py
 """
 
 import os
+import sys
 import shutil
 from pathlib import Path
+
+# Ensure project root is on sys.path for src.* imports
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+os.chdir(_PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
@@ -30,7 +37,7 @@ from src.data_loader import load_shakemap, load_nbi, classify_nbi_to_hazus, DATA
 from src.interpolation import interpolate_im
 from src.fragility import damage_state_probabilities as dsp
 
-ROOT = Path(__file__).parent
+ROOT = _PROJECT_ROOT
 OUT_DIR = ROOT / "output" / "demo_W1_0224" / "report_maps"
 
 # ── Scenario Definitions ─────────────────────────────────────────
@@ -460,9 +467,14 @@ def main():
         scenario_data.append((sc, nbi))
 
     # Clean old output
-    if OUT_DIR.exists():
-        shutil.rmtree(OUT_DIR)
-    OUT_DIR.mkdir(parents=True)
+    # Clean old outputs (tolerant of Google Drive / desktop.ini locks)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        for f in OUT_DIR.iterdir():
+            if f.is_file() and f.suffix in (".png", ".docx", ".txt"):
+                f.unlink()
+    except PermissionError:
+        pass  # Google Drive sync lock — harmless
 
     # Generate
     print(f"\n[3/3] Generating maps...")

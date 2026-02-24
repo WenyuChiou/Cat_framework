@@ -11,7 +11,7 @@ Each scenario produces:
   - scenario_summary.txt        (text summary)
 
 Usage:
-    python run_demo.py
+    python scripts/run_demo.py
 """
 
 import os
@@ -20,6 +20,12 @@ import time
 import shutil
 import textwrap
 from pathlib import Path
+
+# Ensure project root is on sys.path for src.* imports
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+os.chdir(_PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
@@ -42,7 +48,7 @@ from src.plotting import (
     plot_portfolio_damage,
 )
 
-ROOT = Path(__file__).parent
+ROOT = _PROJECT_ROOT
 DEMO_DIR = ROOT / "output" / "demo_W1_0224"
 
 # ── Demo Scenarios ───────────────────────────────────────────────
