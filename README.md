@@ -66,7 +66,7 @@ Path A (ShakeMap) uses data-conditioned ground motions from a historical event. 
 ```
 Layer 0 - DATA        hazus_params.py ──── config.py ──── gmpe_base.py
                           │                    │               │
-Layer 1 - CORE        hazard.py   bridge_classes.py   gmpe_bssa21.py  gmpe_ba08.py
+Layer 1 - CORE        hazard.py   bridge_classes.py   gmpe_bssa21.py
                           │              │              interpolation.py
                           │              │                   │
 Layer 2 - DOMAIN      fragility.py   exposure.py       data_loader.py
@@ -83,7 +83,7 @@ Each layer only depends on layers above it (no upward or circular dependencies).
 ![Backbone Pipeline](docs/diagram_pipeline.png)
 ![Module Dependencies](docs/diagram_dependency.png)
 
-### GMPE Plugin Architecture (3 files)
+### GMPE Plugin Architecture (2 files)
 
 The GMPE subsystem uses a **Protocol + Registry** pattern to support pluggable ground motion models:
 
@@ -96,21 +96,15 @@ src/gmpe_base.py          ← Infrastructure (Protocol + Registry)
   ├── get_gmpe("bssa21")   → returns the registered model instance
   └── IM_TYPE_TO_PERIOD    → {"PGA": 0.0, "SA03": 0.3, "SA10": 1.0, "SA30": 3.0}
 
-src/gmpe_bssa21.py         ← BSSA14/21 model (full NGA-West2)
+src/gmpe_bssa21.py         ← BSSA14/21 model (full NGA-West2, ported from MATLAB)
   │
   ├── 108-row coefficient table (from official CSV, verified vs OpenQuake)
   ├── BSSA21 class implementing GMPEModel
   │     .compute() → F_E + F_P + F_S → median Sa(g), sigma_ln
   └── auto-registers as "bssa21" on import
-
-src/gmpe_ba08.py           ← BA08 model (lightweight wrapper)
-  │
-  ├── Wraps existing hazard.py functions (boore_atkinson_2008_sa10, _estimate_pga_ref)
-  ├── Supports only PGA + Sa(1.0s)
-  └── auto-registers as "ba08" on import
 ```
 
-**Why 3 files?** Separation of concerns — `gmpe_base.py` defines the contract, each model file implements it independently. Adding a new GMPE (e.g., Kale et al. 2015) requires only creating a new file that implements `GMPEModel` and calls `register_gmpe()`.
+**Why 2 files?** Separation of concerns — `gmpe_base.py` defines the contract, `gmpe_bssa21.py` implements it. Adding a new GMPE in the future requires only creating a new file that implements `GMPEModel` and calls `register_gmpe()`.
 
 ### Prepared Data & Embedded Parameters
 
@@ -123,7 +117,6 @@ The framework comes with all necessary data and parameters built-in:
 | **Station data** | ~400 seismic station recordings | USGS | `data/stationlist.json` |
 | **Fragility params** | 14 HWB classes × 4 damage states (median + β) | Hazus 6.1 Table 7.9 | `src/hazus_params.py` |
 | **GMPE coefficients** | 108 periods × 36 coefficients (BSSA14/21) | Boore official CSV | `src/gmpe_bssa21.py` |
-| **BA08 coefficients** | PGA + Sa(1.0s) regression coefficients | Boore & Atkinson 2008 | `src/hazard.py` |
 | **Damage ratios** | 5 damage states → repair cost % | Hazus Table 7.11 | `src/loss.py` |
 | **HWB decision tree** | NBI material/design → HWB class mapping | Hazus Table 7.3 | `src/bridge_classes.py` |
 | **Spatial correlation** | Jayaram-Baker range parameter (40.7 km) | JB2009 | `src/hazard.py` |
@@ -178,7 +171,7 @@ All analysis parameters are centralized in `config.yaml`. The configuration syst
 # ── Ground Motion Source ───────────────────────
 im_source: shakemap          # "shakemap" (from grid.xml) or "gmpe" (forward prediction)
 im_type:   SA10              # PGA | SA03 | SA10 | SA30
-gmpe_model: bssa21           # "ba08" or "bssa21" (only used when im_source=gmpe)
+gmpe_model: bssa21           # GMPE model (only used when im_source=gmpe)
 
 # ── Spatial Interpolation ─────────────────────
 interpolation:
@@ -245,7 +238,7 @@ The configuration loader enforces:
 
 3. **Zero-IM warning**: Bridges that receive IM ≤ 0.0g after spatial interpolation trigger a `UserWarning` with count, indicating potential spatial extent mismatch between ShakeMap and bridge inventory.
 
-4. **GMPE scenario requirement**: If `im_source: gmpe`, a `gmpe_scenario` block must be present. The `gmpe_model` value must be a registered model name (`ba08` or `bssa21`). Unknown models raise `ValueError` at load time.
+4. **GMPE scenario requirement**: If `im_source: gmpe`, a `gmpe_scenario` block must be present. The `gmpe_model` must be a registered model name (currently `bssa21`). Unknown models raise `ValueError` at load time.
 
 ---
 
@@ -380,7 +373,6 @@ data/
 |--------|---------|-------------|
 | `src/hazard.py` | Boore-Atkinson 2008 GMPE, spatial correlation, GMF generation | `boore_atkinson_2008_sa10()`, `EarthquakeScenario`, `SiteParams` |
 | `src/gmpe_bssa21.py` | BSSA14/21 NGA-West2 GMPE — 108 periods (PGV+PGA+106 SA) | `BSSA21` class, auto-registered at import |
-| `src/gmpe_ba08.py` | BA08 GMPE wrapper for plugin architecture | `BA08` class (wraps `hazard.py` functions) |
 | `src/bridge_classes.py` | NBI → Hazus bridge classification decision tree | `classify_bridge()`, `NORTHRIDGE_BRIDGE_CLASSES` |
 | `src/interpolation.py` | 5 spatial interpolation methods for IM assignment | `interpolate_im()` |
 

@@ -46,7 +46,7 @@ class AnalysisConfig:
 
     # GMPE scenario (when im_source == "gmpe")
     gmpe_scenario: Optional[dict[str, Any]] = None
-    gmpe_model: str = "ba08"           # "ba08" or "bssa21"
+    gmpe_model: str = "bssa21"          # GMPE model name (default: bssa21)
 
     # Fragility overrides
     fragility_overrides: dict[str, dict] = field(default_factory=dict)
@@ -219,7 +219,6 @@ def validate_config(cfg: AnalysisConfig) -> None:
             )
         # Validate gmpe_model is registered (lazy import to avoid circular deps)
         try:
-            import src.gmpe_ba08   # noqa: F401 — registers BA08
             import src.gmpe_bssa21  # noqa: F401 — registers BSSA21
             from src.gmpe_base import GMPE_REGISTRY
             if cfg.gmpe_model not in GMPE_REGISTRY:

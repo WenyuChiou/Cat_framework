@@ -341,7 +341,6 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
 
     if config.im_source == "gmpe":
         # ── GMPE path: compute IM from scenario parameters ──
-        import src.gmpe_ba08    # noqa: F401 — register BA08
         import src.gmpe_bssa21  # noqa: F401 — register BSSA21
         from src.gmpe_base import get_gmpe, IM_TYPE_TO_PERIOD
         from src.hazard import haversine_distance_km, EarthquakeScenario

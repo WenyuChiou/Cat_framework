@@ -9,8 +9,7 @@ import pytest
 import numpy as np
 import pandas as pd
 
-# Ensure GMPE modules are registered
-import src.gmpe_ba08    # noqa: F401
+# Ensure GMPE module is registered
 import src.gmpe_bssa21  # noqa: F401
 
 from src.config import AnalysisConfig, validate_config
@@ -156,30 +155,6 @@ class TestGMPEtoDamage:
             f"Nearest bridge P(complete)={complete_probs[0]:.4f} should exceed "
             f"farthest bridge P(complete)={complete_probs[-1]:.4f}"
         )
-
-
-# ── BA08 wrapper tests ──────────────────────────────────────────────────
-
-class TestBA08Wrapper:
-    def test_sa10_matches_direct_call(self):
-        """BA08 wrapper Sa(1.0) should match direct hazard.py call."""
-        from src.hazard import boore_atkinson_2008_sa10
-
-        ba08 = get_gmpe("ba08")
-        direct_med, direct_sig = boore_atkinson_2008_sa10(
-            6.7, 20.0, 760.0, "reverse"
-        )
-        wrapper_med, wrapper_sig = ba08.compute(
-            Mw=6.7, R_JB=20.0, Vs30=760.0, fault_type="reverse", period=1.0
-        )
-        assert abs(direct_med - wrapper_med) < 1e-10
-        assert abs(direct_sig - wrapper_sig) < 1e-10
-
-    def test_unsupported_period_raises(self):
-        ba08 = get_gmpe("ba08")
-        with pytest.raises(ValueError, match="only supports"):
-            ba08.compute(Mw=6.5, R_JB=20.0, Vs30=760.0,
-                         fault_type="reverse", period=0.3)
 
 
 # ── IM_TYPE_TO_PERIOD mapping ────────────────────────────────────────────

@@ -8,9 +8,8 @@ published BSSA14 coefficient table and the OpenQuake implementation.
 import math
 import pytest
 
-# Ensure GMPE modules are imported (auto-registers)
+# Ensure GMPE module is imported (auto-registers)
 import src.gmpe_bssa21  # noqa: F401
-import src.gmpe_ba08    # noqa: F401
 
 from src.gmpe_base import get_gmpe, GMPE_REGISTRY, IM_TYPE_TO_PERIOD
 from src.gmpe_bssa21 import BSSA21, _get_row
@@ -21,9 +20,6 @@ from src.gmpe_bssa21 import BSSA21, _get_row
 class TestRegistry:
     def test_bssa21_registered(self):
         assert "bssa21" in GMPE_REGISTRY
-
-    def test_ba08_registered(self):
-        assert "ba08" in GMPE_REGISTRY
 
     def test_get_gmpe_bssa21(self):
         model = get_gmpe("bssa21")
@@ -174,21 +170,15 @@ class TestBSSA21Compute:
         # but total sigma can go either way. Just check they're different.
         assert sigma_small != sigma_large
 
-    def test_compare_with_ba08_sa10(self):
-        """BSSA21 and BA08 should give same-order-of-magnitude Sa(1.0)."""
-        ba08 = get_gmpe("ba08")
+    def test_reasonable_sa10_northridge(self):
+        """BSSA21 Sa(1.0s) for Northridge-like scenario should be reasonable."""
         bssa21 = get_gmpe("bssa21")
-
-        params = dict(Mw=6.7, R_JB=20.0, Vs30=760.0,
-                      fault_type="reverse", period=1.0)
-        im_ba08, _ = ba08.compute(**params)
-        im_bssa21, _ = bssa21.compute(**params)
-
-        # Should be within factor of 3 (they're different generations)
-        ratio = im_bssa21 / im_ba08
-        assert 0.3 < ratio < 3.0, (
-            f"BSSA21/BA08 ratio = {ratio:.2f} — expected within 0.3–3.0"
+        median, _ = bssa21.compute(
+            Mw=6.7, R_JB=20.0, Vs30=760.0,
+            fault_type="reverse", period=1.0
         )
+        # Sa(1.0s) at 20 km for Mw 6.7 on rock: ~0.05–0.5g
+        assert 0.01 < median < 1.0
 
 
 # ── Multi-scenario batch test ────────────────────────────────────────────
