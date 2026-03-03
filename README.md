@@ -83,6 +83,54 @@ Each layer only depends on layers above it (no upward or circular dependencies).
 ![Backbone Pipeline](docs/diagram_pipeline.png)
 ![Module Dependencies](docs/diagram_dependency.png)
 
+### GMPE Plugin Architecture (3 files)
+
+The GMPE subsystem uses a **Protocol + Registry** pattern to support pluggable ground motion models:
+
+```
+src/gmpe_base.py          ← Infrastructure (Protocol + Registry)
+  │
+  ├── GMPEModel Protocol   → defines interface: .compute(Mw, R_JB, Vs30, fault_type, period)
+  ├── GMPE_REGISTRY        → dict mapping model name → model instance
+  ├── register_gmpe()      → called by each model at import time
+  ├── get_gmpe("bssa21")   → returns the registered model instance
+  └── IM_TYPE_TO_PERIOD    → {"PGA": 0.0, "SA03": 0.3, "SA10": 1.0, "SA30": 3.0}
+
+src/gmpe_bssa21.py         ← BSSA14/21 model (full NGA-West2)
+  │
+  ├── 108-row coefficient table (from official CSV, verified vs OpenQuake)
+  ├── BSSA21 class implementing GMPEModel
+  │     .compute() → F_E + F_P + F_S → median Sa(g), sigma_ln
+  └── auto-registers as "bssa21" on import
+
+src/gmpe_ba08.py           ← BA08 model (lightweight wrapper)
+  │
+  ├── Wraps existing hazard.py functions (boore_atkinson_2008_sa10, _estimate_pga_ref)
+  ├── Supports only PGA + Sa(1.0s)
+  └── auto-registers as "ba08" on import
+```
+
+**Why 3 files?** Separation of concerns — `gmpe_base.py` defines the contract, each model file implements it independently. Adding a new GMPE (e.g., Kale et al. 2015) requires only creating a new file that implements `GMPEModel` and calls `register_gmpe()`.
+
+### Prepared Data & Embedded Parameters
+
+The framework comes with all necessary data and parameters built-in:
+
+| Category | What | Source | Location |
+|----------|------|--------|----------|
+| **Bridge inventory** | 25,000+ California bridges | FHWA NBI 2024 | `data/CA24.txt` |
+| **Ground motion** | ShakeMap grid (1994 Northridge) | USGS | `data/grid.xml` |
+| **Station data** | ~400 seismic station recordings | USGS | `data/stationlist.json` |
+| **Fragility params** | 14 HWB classes × 4 damage states (median + β) | Hazus 6.1 Table 7.9 | `src/hazus_params.py` |
+| **GMPE coefficients** | 108 periods × 36 coefficients (BSSA14/21) | Boore official CSV | `src/gmpe_bssa21.py` |
+| **BA08 coefficients** | PGA + Sa(1.0s) regression coefficients | Boore & Atkinson 2008 | `src/hazard.py` |
+| **Damage ratios** | 5 damage states → repair cost % | Hazus Table 7.11 | `src/loss.py` |
+| **HWB decision tree** | NBI material/design → HWB class mapping | Hazus Table 7.3 | `src/bridge_classes.py` |
+| **Spatial correlation** | Jayaram-Baker range parameter (40.7 km) | JB2009 | `src/hazard.py` |
+| **Classified output** | Pre-classified bridge inventory (Northridge region) | Generated | `data/nbi_classified.csv` |
+
+**No external downloads required** for a standard analysis — all parameters are embedded in the source code, and the Northridge data files are included in the repository.
+
 ---
 
 ## 2. Getting Started
@@ -233,6 +281,46 @@ ShakeMap (grid.xml)
   │
   └── Output: im_selected column on bridge DataFrame
 ```
+
+### End-to-End Automated Flow
+
+The framework automates the entire chain from raw NBI data to loss estimates. Users only configure `config.yaml`; all parameter lookups are automatic:
+
+```
+config.yaml
+  │
+  ├─ bridge_selection: {county: "037", year_built: ">1960", material: ["concrete"]}
+  ├─ hwb_filter: [HWB3, HWB5]          ← optional: restrict to specific classes
+  ├─ im_source: gmpe / shakemap
+  ├─ gmpe_model: bssa21                 ← only for GMPE path
+  │
+  ▼
+Step 1: FILTER — NBI 25,000 bridges → filtered subset (e.g. 2,953)
+  │     (region, county, material, year_built, etc.)
+  │
+Step 2: CLASSIFY — classify_nbi_to_hazus() assigns HWB class per bridge
+  │     (uses NBI material, design type, span count, length, year_built)
+  │
+Step 3: COMPUTE IM — for each bridge:
+  │     ShakeMap path: interpolate grid.xml to bridge lat/lon
+  │     GMPE path:     haversine → R_JB, then gmpe.compute(Mw, R_JB, Vs30, ...)
+  │     → nbi["im_selected"] = Sa(g)
+  │
+Step 4: FRAGILITY — for each bridge:
+  │     Look up HWB class → HAZUS_BRIDGE_FRAGILITY[hwb]["damage_states"]
+  │     → median, beta for each damage state (Hazus Table 7.9, β=0.6)
+  │     → P[DS ≥ ds | IM] = Φ((ln(IM) - ln(median)) / beta)
+  │     → discrete P(none), P(slight), ..., P(complete)
+  │
+Step 5: LOSS — for each bridge:
+  │     E[Loss] = Σ P(DS=ds) × DamageRatio(ds) × ReplacementCost
+  │     → portfolio aggregation → EP curve, AAL
+  │
+  ▼
+Output: bridge_damage_results.csv + visualizations + Word report
+```
+
+No manual parameter lookup is needed — the framework reads the bridge's HWB class and automatically retrieves the corresponding fragility parameters from `src/hazus_params.py`.
 
 ### HWB Classification Decision Tree
 
