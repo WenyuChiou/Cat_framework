@@ -128,23 +128,27 @@ print("Saved: 01_shakemap_vs_gmpe_spatial.png")
 # ══════════════════════════════════════════════════════════════════════
 fig, ax = plt.subplots(figsize=(10, 7))
 
-ax.scatter(nbi["R_JB_km"], nbi["im_shakemap"], s=6, alpha=0.4, c="steelblue",
-           label="ShakeMap (observed)")
-ax.scatter(nbi["R_JB_km"], nbi["im_gmpe"], s=6, alpha=0.4, c="orangered",
-           label="BSSA21 GMPE (median)")
-
-# GMPE curve
+# +/- 1 sigma band (draw first so it's behind everything)
 r_range = np.logspace(np.log10(0.5), np.log10(100), 100)
 gmpe_curve = np.array([
     gmpe.compute(Mw=MW, R_JB=r, Vs30=VS30, fault_type=FAULT_TYPE, period=period)[0]
     for r in r_range
 ])
-ax.plot(r_range, gmpe_curve, "r-", linewidth=2.5, label="BSSA21 median curve")
-
-# +/- 1 sigma band
 _, sig_ref = gmpe.compute(Mw=MW, R_JB=20, Vs30=VS30, fault_type=FAULT_TYPE, period=period)
 ax.fill_between(r_range, gmpe_curve * np.exp(-sig_ref), gmpe_curve * np.exp(sig_ref),
-                color="orangered", alpha=0.12, label=f"BSSA21 +/- 1 sigma ({sig_ref:.2f})")
+                color="#FFA500", alpha=0.15, label=f"BSSA21 ±1σ ({sig_ref:.2f})")
+
+# Scatter: ShakeMap observed
+ax.scatter(nbi["R_JB_km"], nbi["im_shakemap"], s=12, alpha=0.5, c="#4682B4",
+           edgecolors="none", marker="o", label="ShakeMap (nearest interp.)", zorder=3)
+
+# Scatter: GMPE per-bridge predictions
+ax.scatter(nbi["R_JB_km"], nbi["im_gmpe"], s=12, alpha=0.5, c="#2CA02C",
+           edgecolors="none", marker="s", label="BSSA21 per-bridge", zorder=3)
+
+# GMPE median curve
+ax.plot(r_range, gmpe_curve, color="#D62728", linewidth=2.5,
+        label="BSSA21 median curve", zorder=4)
 
 ax.set_xscale("log")
 ax.set_yscale("log")
@@ -152,7 +156,9 @@ ax.set_xlabel("Distance to Epicenter R_JB (km)", fontsize=12)
 ax.set_ylabel("Sa(1.0s) [g]", fontsize=12)
 ax.set_title("Attenuation Comparison: ShakeMap vs BSSA21\n"
              f"Northridge Mw {MW}, Vs30={VS30} m/s, {FAULT_TYPE}", fontsize=13, fontweight="bold")
-ax.legend(fontsize=10)
+legend = ax.legend(fontsize=10, loc="upper right", framealpha=0.9, edgecolor="gray")
+for lh in legend.legend_handles:
+    lh.set_alpha(1.0)  # full opacity in legend
 ax.grid(True, alpha=0.3, which="both")
 ax.set_xlim(0.5, 100)
 ax.set_ylim(0.01, 2.0)
