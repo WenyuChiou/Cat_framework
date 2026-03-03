@@ -44,14 +44,30 @@ The framework follows the standard **four-component CAT model architecture** wid
                    bridge_classes.py
 ```
 
-**Data flow:** ShakeMap grid.xml → spatial interpolation → Sa(g) per bridge → lognormal fragility CDF → P(DS) → E[Loss] = Σ(P × DR × RC) → EP curve, AAL
+**Data flow (two paths converge at `im_selected`):**
+
+```
+[Path A: ShakeMap]                         [Path B: GMPE]
+config: im_source=shakemap                 config: im_source=gmpe, gmpe_model=bssa21
+  ↓                                          ↓
+load grid.xml                              build EarthquakeScenario from gmpe_scenario
+  ↓                                          ↓
+interpolate_im() at bridge sites           get_gmpe("bssa21").compute(Mw,Rjb,Vs30,...)
+  ↓                                          ↓
+         nbi["im_selected"]  ←─────────────────┘
+                ↓
+        fragility_curve() → damage_state_probabilities() → E[Loss] → EP, AAL
+```
+
+Path A (ShakeMap) uses data-conditioned ground motions from a historical event. Path B (GMPE) computes ground motions from a forward scenario prediction — ideal for what-if analyses and PSHA.
 
 ### Module Dependency Graph (5-Layer Architecture)
 
 ```
-Layer 0 - DATA        hazus_params.py ──── config.py
-                          │                    │
-Layer 1 - CORE        hazard.py   bridge_classes.py   interpolation.py
+Layer 0 - DATA        hazus_params.py ──── config.py ──── gmpe_base.py
+                          │                    │               │
+Layer 1 - CORE        hazard.py   bridge_classes.py   gmpe_bssa21.py  gmpe_ba08.py
+                          │              │              interpolation.py
                           │              │                   │
 Layer 2 - DOMAIN      fragility.py   exposure.py       data_loader.py
                           │              │                   │
@@ -112,8 +128,9 @@ All analysis parameters are centralized in `config.yaml`. The configuration syst
 
 ```yaml
 # ── Ground Motion Source ───────────────────────
-im_source: shakemap          # "shakemap" (from grid.xml) or "gmpe" (BA08 synthetic)
+im_source: shakemap          # "shakemap" (from grid.xml) or "gmpe" (forward prediction)
 im_type:   SA10              # PGA | SA03 | SA10 | SA30
+gmpe_model: bssa21           # "ba08" or "bssa21" (only used when im_source=gmpe)
 
 # ── Spatial Interpolation ─────────────────────
 interpolation:
@@ -138,6 +155,15 @@ bridge_selection:
 
 hwb_filter: [HWB3, HWB5]    # Restrict to specific HWB classes
 design_era: conventional     # "conventional" or "seismic"
+
+# ── GMPE Scenario (required when im_source=gmpe) ──
+gmpe_scenario:
+  magnitude: 6.7
+  lat: 34.213
+  lon: -118.537
+  depth_km: 18.4
+  fault_type: reverse        # "strike_slip" | "normal" | "reverse" | "unspecified"
+  vs30: 360.0                # Default site Vs30 (used if bridge has no Vs30 column)
 
 # ── Fragility Overrides ──────────────────────
 # REQUIRED when im_type != SA10 (Hazus defaults are Sa(1.0s)-calibrated)
@@ -170,6 +196,8 @@ The configuration loader enforces:
 2. **IM availability check**: At runtime, if the configured IM type is not present in the ShakeMap grid data, a `ValueError` is raised with the list of available IM columns. This replaces a previous silent fallback to 0.0g that produced zero-damage results without warning.
 
 3. **Zero-IM warning**: Bridges that receive IM ≤ 0.0g after spatial interpolation trigger a `UserWarning` with count, indicating potential spatial extent mismatch between ShakeMap and bridge inventory.
+
+4. **GMPE scenario requirement**: If `im_source: gmpe`, a `gmpe_scenario` block must be present. The `gmpe_model` value must be a registered model name (`ba08` or `bssa21`). Unknown models raise `ValueError` at load time.
 
 ---
 
@@ -256,12 +284,15 @@ data/
 |--------|---------|-------------|
 | `src/hazus_params.py` | Hazus 6.1 Table 7.9 fragility parameters for 14 HWB classes | `HAZUS_BRIDGE_FRAGILITY`, `DAMAGE_STATE_ORDER` |
 | `src/config.py` | YAML config loader with fail-fast validation | `AnalysisConfig`, `load_config()`, `IM_COLUMN_MAP` |
+| `src/gmpe_base.py` | GMPE protocol, model registry, IM-period mapping | `GMPEModel`, `GMPE_REGISTRY`, `get_gmpe()`, `IM_TYPE_TO_PERIOD` |
 
 ### Layer 1: Core (Fundamental Computations)
 
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
 | `src/hazard.py` | Boore-Atkinson 2008 GMPE, spatial correlation, GMF generation | `boore_atkinson_2008_sa10()`, `EarthquakeScenario`, `SiteParams` |
+| `src/gmpe_bssa21.py` | BSSA14/21 NGA-West2 GMPE — 108 periods (PGV+PGA+106 SA) | `BSSA21` class, auto-registered at import |
+| `src/gmpe_ba08.py` | BA08 GMPE wrapper for plugin architecture | `BA08` class (wraps `hazard.py` functions) |
 | `src/bridge_classes.py` | NBI → Hazus bridge classification decision tree | `classify_bridge()`, `NORTHRIDGE_BRIDGE_CLASSES` |
 | `src/interpolation.py` | 5 spatial interpolation methods for IM assignment | `interpolate_im()` |
 
@@ -309,6 +340,27 @@ ln(Sa) = F_M(M) + F_D(R_JB, M) + F_S(V_s30, Sa_ref)
 | F_S | `b_lin · ln(min(V_s30, V_ref) / V_ref) + F_NL(PGA_ref)` | Linear + nonlinear site amplification |
 
 **Aleatory variability:** σ_total = 0.564 (decomposed as τ = 0.255 inter-event, φ = 0.502 intra-event)
+
+#### Boore, Stewart, Seyhan & Atkinson (2014/2021) GMPE — BSSA21
+
+The NGA-West2 successor to BA08, supporting 108 spectral periods (PGV, PGA, 0.01–10s SA):
+
+```
+ln(Y) = F_E(M, mechanism) + F_P(R_JB, M) + F_S(Vs30, PGA_r)
+```
+
+| Term | Formula | Description |
+|------|---------|-------------|
+| F_E | Piecewise in M around hinge M_h(T): `e0 + e1·U + e2·SS + e3·NS + e4·RS + {e5·(M-Mh) + e6·(M-Mh)² if M≤Mh; e5·(M-Mh) if M>Mh}` | Source term with mechanism-dependent dummy variables (U/SS/NS/RS) |
+| F_P | `[c1 + c2·(M - M_ref)] · ln(R/R_ref) + (c3 + Δc3) · (R - R_ref)` where `R = √(R_JB² + h²)` | Geometric spreading + anelastic attenuation; h is pseudo-depth |
+| F_S(lin) | `c_lin · ln(min(Vs30, V_ref) / V_ref)` | Linear site amplification (Vs30 ≤ 760 m/s) |
+| F_S(nl) | `f4 · [exp(f5·(min(Vs30,760)-360)) - exp(f5·(760-360))] · ln((PGA_r + f3) / f3)` | Nonlinear site amplification driven by rock-reference PGA_r |
+
+**Self-referencing PGA_r:** The nonlinear site term requires PGA on rock (Vs30 = 760 m/s). This is computed by evaluating the GMPE at the PGA period with F_S = 0, creating a recursive dependency resolved by computing the rock-site PGA first.
+
+**Aleatory variability:** σ = √(φ² + τ²), where τ is magnitude-dependent (interpolated linearly between M = 4.5 and M = 5.5).
+
+**Point-source approximation:** The implementation uses epicentral distance (haversine) as a proxy for R_JB. This is exact for point sources and conservative for finite faults at short distances.
 
 #### Jayaram-Baker (2009) Spatial Correlation
 
@@ -536,6 +588,27 @@ result = compute_bridge_loss(sa, "HWB5", replacement_cost=5_000_000)
 print(f"Sa = {sa:.3f}g, E[Loss] = ${result.expected_loss:,.0f}")
 ```
 
+### Single Bridge with BSSA21 GMPE
+
+```python
+import src.gmpe_bssa21  # triggers auto-registration
+from src.gmpe_base import get_gmpe
+
+gmpe = get_gmpe("bssa21")
+
+# Mw 7.0, 20 km from fault, soft soil, Sa(1.0s)
+median_g, sigma_ln = gmpe.compute(Mw=7.0, R_JB=20.0, Vs30=270.0,
+                                   fault_type="strike_slip", period=1.0)
+print(f"Sa(1.0s) = {median_g:.4f} g  (σ_ln = {sigma_ln:.3f})")
+
+# Multiple periods
+for T in [0.0, 0.3, 1.0, 3.0]:
+    med, sig = gmpe.compute(Mw=7.0, R_JB=20.0, Vs30=270.0,
+                             fault_type="strike_slip", period=T)
+    label = "PGA" if T == 0.0 else f"Sa({T}s)"
+    print(f"  {label:>8s} = {med:.4f} g")
+```
+
 ### Config-Driven Analysis
 
 ```python
@@ -587,7 +660,7 @@ print(f"AAL = ${prob_result.aal:,.0f}")
 
 | Area | Limitation | Impact | Mitigation |
 |------|-----------|--------|------------|
-| **GMPE** | Only BA08 implemented; single-period Sa(1.0s) | Not suitable for short-period-sensitive structures | Future: multi-GMPE logic tree |
+| **GMPE** | BA08 (PGA + Sa 1.0s) and BSSA21 (108 periods); point-source R_JB approximation | R_JB ≈ R_epi is conservative for large finite faults | Future: finite-fault R_JB, logic tree weighting |
 | **Fragility** | Uniform β=0.6 for all classes | Underestimates epistemic uncertainty | Future: class-specific β from literature |
 | **Site effects** | No Vs30 grid — assumes uniform site conditions | Systematic bias in heterogeneous geology | Future: integrate USGS Vs30 model |
 | **Loss** | Fixed damage ratios from Hazus Table 7.11 | May not reflect regional repair costs | Configurable via `fragility_overrides` |
@@ -598,11 +671,12 @@ print(f"AAL = ${prob_result.aal:,.0f}")
 
 ## 11. References
 
-1. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA. *Earthquake Spectra*, 24(1), 99-138. https://doi.org/10.1193/1.2830434
-2. Jayaram, N. & Baker, J.W. (2009). Correlation model for spatially distributed ground-motion intensities. *Earthquake Engineering & Structural Dynamics*, 38(15), 1687-1708. https://doi.org/10.1002/eqe.922
-3. FEMA (2024). *Hazus 6.1 Earthquake Model Technical Manual*. Federal Emergency Management Agency. https://www.fema.gov/hazus
-4. Basoz, N. & Kiremidjian, A. (1998). Evaluation of Bridge Damage Data from the Loma Prieta and Northridge Earthquakes. MCEER-98-0004.
-5. Werner, S.D., et al. (2006). Seismic Risk Analysis of Highway Systems. MCEER-06-0011.
-6. Caltrans (1994). The Northridge Earthquake: Post-Earthquake Investigation Report.
-7. Worden, C.B., et al. (2018). Spatial and Spectral Interpolation of Ground-Motion Intensity Measure Observations. *BSSA*, 108(2), 866-875. https://doi.org/10.1785/0120170201
-8. FHWA (2024). National Bridge Inventory (NBI) Data. https://www.fhwa.dot.gov/bridge/nbi.cfm
+1. Boore, D.M., Stewart, J.P., Seyhan, E. & Atkinson, G.M. (2014). NGA-West2 Equations for Predicting PGA, PGV, and 5%-Damped PSA for Shallow Crustal Earthquakes. *Earthquake Spectra*, 30(3), 1057-1085. https://doi.org/10.1193/070113EQS184M
+2. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA. *Earthquake Spectra*, 24(1), 99-138. https://doi.org/10.1193/1.2830434
+3. Jayaram, N. & Baker, J.W. (2009). Correlation model for spatially distributed ground-motion intensities. *Earthquake Engineering & Structural Dynamics*, 38(15), 1687-1708. https://doi.org/10.1002/eqe.922
+4. FEMA (2024). *Hazus 6.1 Earthquake Model Technical Manual*. Federal Emergency Management Agency. https://www.fema.gov/hazus
+5. Basoz, N. & Kiremidjian, A. (1998). Evaluation of Bridge Damage Data from the Loma Prieta and Northridge Earthquakes. MCEER-98-0004.
+6. Werner, S.D., et al. (2006). Seismic Risk Analysis of Highway Systems. MCEER-06-0011.
+7. Caltrans (1994). The Northridge Earthquake: Post-Earthquake Investigation Report.
+8. Worden, C.B., et al. (2018). Spatial and Spectral Interpolation of Ground-Motion Intensity Measure Observations. *BSSA*, 108(2), 866-875. https://doi.org/10.1785/0120170201
+9. FHWA (2024). National Bridge Inventory (NBI) Data. https://www.fhwa.dot.gov/bridge/nbi.cfm
