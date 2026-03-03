@@ -38,8 +38,15 @@ bridge_selection:
 # ── 3. IM Source ─────────────────────────────────────────────
 # Where to get Intensity Measure values for each bridge.
 #   shakemap : Read from USGS ShakeMap grid.xml (default, most accurate)
-#   gmpe     : Calculate from BA08 GMPE using scenario parameters below
+#   gmpe     : Calculate from GMPE using scenario parameters below
 im_source: shakemap
+
+# ── 3b. GMPE Model (for im_source: gmpe) ──────────────────
+# Which GMPE to use for ground motion prediction.
+#   ba08   : Boore & Atkinson (2008) — NGA-West1, Sa(1.0s) + PGA only
+#   bssa21 : Boore, Stewart, Seyhan & Atkinson (2014/2021) — NGA-West2,
+#            full spectral range (PGA, 0.01-10s), recommended
+# gmpe_model: bssa21
 
 # ── 4. Intensity Measure ─────────────────────────────────────
 # Which IM type to use for fragility analysis.
@@ -66,13 +73,14 @@ interpolation:
 # ── 6. GMPE Scenario (for im_source: gmpe) ───────────────────
 # Only used when im_source is set to "gmpe".
 # Defines the earthquake scenario for GMPE-based IM calculation.
+# To use: set im_source: gmpe and uncomment gmpe_scenario + gmpe_model.
 # gmpe_scenario:
 #   Mw: 6.7                 # Moment magnitude
-#   lat: 34.213             # Epicenter latitude
+#   lat: 34.213             # Epicenter latitude (Northridge)
 #   lon: -118.537           # Epicenter longitude
 #   depth_km: 18.4          # Hypocentral depth
 #   fault_type: reverse     # strike_slip, normal, reverse, unspecified
-#   vs30: 760               # Default site Vs30 (m/s)
+#   vs30: 360               # Default site Vs30 (m/s), used if NBI has no vs30
 
 # ── 7. Fragility Parameters ──────────────────────────────────
 # Override Hazus defaults for specific HWB classes.

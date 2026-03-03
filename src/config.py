@@ -46,6 +46,7 @@ class AnalysisConfig:
 
     # GMPE scenario (when im_source == "gmpe")
     gmpe_scenario: Optional[dict[str, Any]] = None
+    gmpe_model: str = "ba08"           # "ba08" or "bssa21"
 
     # Fragility overrides
     fragility_overrides: dict[str, dict] = field(default_factory=dict)
@@ -164,6 +165,10 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
     if "gmpe_scenario" in raw and isinstance(raw["gmpe_scenario"], dict):
         cfg.gmpe_scenario = raw["gmpe_scenario"]
 
+    # GMPE model
+    if "gmpe_model" in raw:
+        cfg.gmpe_model = str(raw["gmpe_model"]).lower()
+
     # Fragility overrides
     if "fragility_overrides" in raw and isinstance(raw["fragility_overrides"], dict):
         cfg.fragility_overrides = raw["fragility_overrides"]
@@ -205,6 +210,28 @@ def validate_config(cfg: AnalysisConfig) -> None:
             f"only. Either set im_type: SA10 or provide fragility_overrides with "
             f"parameters calibrated for {cfg.im_type}."
         )
+    # GMPE-specific validation
+    if cfg.im_source == "gmpe":
+        if not cfg.gmpe_scenario:
+            raise ValueError(
+                "Configuration error: im_source='gmpe' requires a gmpe_scenario "
+                "section with at least Mw, lat, lon, and fault_type."
+            )
+        # Validate gmpe_model is registered (lazy import to avoid circular deps)
+        try:
+            import src.gmpe_ba08   # noqa: F401 — registers BA08
+            import src.gmpe_bssa21  # noqa: F401 — registers BSSA21
+            from src.gmpe_base import GMPE_REGISTRY
+            if cfg.gmpe_model not in GMPE_REGISTRY:
+                raise ValueError(
+                    f"Unknown gmpe_model '{cfg.gmpe_model}'. "
+                    f"Available: {list(GMPE_REGISTRY.keys())}"
+                )
+        except ImportError as e:
+            if "numpy" in str(e).lower():
+                pass  # numpy not available; skip registry check
+            else:
+                raise
 
 
 def print_config_summary(cfg: AnalysisConfig) -> None:
@@ -236,13 +263,15 @@ def print_config_summary(cfg: AnalysisConfig) -> None:
         print(f"    Params: {cfg.interpolation_params}")
 
     if cfg.im_source == "gmpe":
+        print(f"  GMPE Model: {cfg.gmpe_model}")
         if cfg.gmpe_scenario:
             s = cfg.gmpe_scenario
             print(f"  GMPE Scenario: Mw={s.get('Mw')}, "
                   f"({s.get('lat')}, {s.get('lon')}), "
-                  f"depth={s.get('depth_km')}km")
+                  f"depth={s.get('depth_km')}km, "
+                  f"fault={s.get('fault_type', 'reverse')}")
         else:
-            print("  ⚠ im_source=gmpe but no gmpe_scenario defined!")
+            print("  WARNING: im_source=gmpe but no gmpe_scenario defined!")
 
     if cfg.im_type != "SA10":
         if cfg.fragility_overrides:

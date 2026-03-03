@@ -340,52 +340,115 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
         config = AnalysisConfig()
 
     if config.im_source == "gmpe":
-        raise NotImplementedError(
-            "im_source='gmpe' is not yet supported in the data analysis pipeline. "
-            "Please use im_source='shakemap' (requires downloaded ShakeMap data) "
-            "or use --pipeline / --probabilistic modes for GMPE-based analysis."
-        )
+        # ── GMPE path: compute IM from scenario parameters ──
+        import src.gmpe_ba08    # noqa: F401 — register BA08
+        import src.gmpe_bssa21  # noqa: F401 — register BSSA21
+        from src.gmpe_base import get_gmpe, IM_TYPE_TO_PERIOD
+        from src.hazard import haversine_distance_km, EarthquakeScenario
 
-    print(f"\n[Analysis] Assigning ground motion to bridges "
-          f"(IM: {config.im_type}, interpolation: {config.interpolation_method})...")
+        gmpe = get_gmpe(config.gmpe_model)
+        target_period = IM_TYPE_TO_PERIOD[config.im_type]
 
-    from src.interpolation import interpolate_im
-
-    grid_lats = shakemap["LAT"].values
-    grid_lons = shakemap["LON"].values
-    bridge_lats = nbi["latitude"].values
-    bridge_lons = nbi["longitude"].values
-
-    # Assign ALL available IMs from ShakeMap using configured interpolation
-    for im_name, sm_col in IM_COLUMN_MAP.items():
-        if sm_col in shakemap.columns:
-            nbi[f"im_{im_name}"] = interpolate_im(
-                grid_lats, grid_lons, shakemap[sm_col].values,
-                bridge_lats, bridge_lons,
-                method=config.interpolation_method,
-                **config.interpolation_params,
+        if target_period not in gmpe.supported_periods:
+            raise ValueError(
+                f"GMPE '{config.gmpe_model}' does not support period "
+                f"{target_period}s (im_type={config.im_type}). "
+                f"Supported periods: {gmpe.supported_periods}"
             )
 
-    # Select the configured IM for fragility analysis
-    im_col_name = f"im_{config.im_type}"
-    if im_col_name not in nbi.columns:
-        available = [c[3:] for c in nbi.columns if c.startswith("im_")]
-        raise ValueError(
-            f"Configured IM type '{config.im_type}' not found in ShakeMap data. "
-            f"Available IMs: {available}. Check that the ShakeMap grid.xml contains "
-            f"the column '{IM_COLUMN_MAP.get(config.im_type, '?')}' or change "
-            f"im_type in your config file."
+        sc = config.gmpe_scenario
+        scenario = EarthquakeScenario(
+            Mw=sc["Mw"],
+            lat=sc["lat"],
+            lon=sc["lon"],
+            depth_km=sc.get("depth_km", 10.0),
+            fault_type=sc.get("fault_type", "reverse"),
         )
-    nbi["im_selected"] = nbi[im_col_name]
-    n_zero = (nbi["im_selected"] <= 0).sum()
-    if n_zero > 0:
-        warnings.warn(
-            f"{n_zero} of {len(nbi)} bridges have IM <= 0.0g after interpolation. "
-            f"These bridges will show zero damage probability. Check that all bridges "
-            f"fall within the ShakeMap spatial extent.",
-            RuntimeWarning,
-            stacklevel=1,
-        )
+        default_vs30 = float(sc.get("vs30", 760.0))
+
+        print(f"\n[Analysis] Computing ground motion via GMPE "
+              f"(model: {config.gmpe_model}, IM: {config.im_type}, "
+              f"Mw={scenario.Mw})...")
+
+        im_values = np.empty(len(nbi))
+        sigma_values = np.empty(len(nbi))
+        for i, (_, row) in enumerate(nbi.iterrows()):
+            # Point-source approximation: R_JB ≈ epicentral surface distance.
+            # For large earthquakes (M>7) near the fault, this overestimates R_JB.
+            R_JB = haversine_distance_km(
+                scenario.lat, scenario.lon,
+                row["latitude"], row["longitude"],
+            )
+            R_JB = max(R_JB, 0.1)  # minimum distance clamp
+            vs30 = float(row["vs30"]) if "vs30" in nbi.columns and pd.notna(row.get("vs30")) else default_vs30
+            median_g, sigma_ln = gmpe.compute(
+                Mw=scenario.Mw,
+                R_JB=R_JB,
+                Vs30=vs30,
+                fault_type=scenario.fault_type,
+                period=target_period,
+            )
+            im_values[i] = median_g
+            sigma_values[i] = sigma_ln
+
+        nbi["im_selected"] = im_values
+        nbi["im_sigma"] = sigma_values
+        nbi[f"im_{config.im_type}"] = im_values
+
+        # Legacy aliases
+        if config.im_type == "SA10":
+            nbi["sa_10"] = im_values
+        if config.im_type == "PGA":
+            nbi["pga"] = im_values
+
+        print(f"  Bridges processed: {len(nbi)}")
+        print(f"  {config.im_type} range: "
+              f"{nbi['im_selected'].min():.4f}g – {nbi['im_selected'].max():.4f}g")
+        print(f"  R_JB range: computed via haversine from epicenter "
+              f"({scenario.lat}, {scenario.lon})")
+
+    else:
+        # ── ShakeMap path: interpolate from grid ──
+        print(f"\n[Analysis] Assigning ground motion to bridges "
+              f"(IM: {config.im_type}, interpolation: {config.interpolation_method})...")
+
+        from src.interpolation import interpolate_im
+
+        grid_lats = shakemap["LAT"].values
+        grid_lons = shakemap["LON"].values
+        bridge_lats = nbi["latitude"].values
+        bridge_lons = nbi["longitude"].values
+
+        # Assign ALL available IMs from ShakeMap using configured interpolation
+        for im_name, sm_col in IM_COLUMN_MAP.items():
+            if sm_col in shakemap.columns:
+                nbi[f"im_{im_name}"] = interpolate_im(
+                    grid_lats, grid_lons, shakemap[sm_col].values,
+                    bridge_lats, bridge_lons,
+                    method=config.interpolation_method,
+                    **config.interpolation_params,
+                )
+
+        # Select the configured IM for fragility analysis
+        im_col_name = f"im_{config.im_type}"
+        if im_col_name not in nbi.columns:
+            available = [c[3:] for c in nbi.columns if c.startswith("im_")]
+            raise ValueError(
+                f"Configured IM type '{config.im_type}' not found in ShakeMap data. "
+                f"Available IMs: {available}. Check that the ShakeMap grid.xml contains "
+                f"the column '{IM_COLUMN_MAP.get(config.im_type, '?')}' or change "
+                f"im_type in your config file."
+            )
+        nbi["im_selected"] = nbi[im_col_name]
+        n_zero = (nbi["im_selected"] <= 0).sum()
+        if n_zero > 0:
+            warnings.warn(
+                f"{n_zero} of {len(nbi)} bridges have IM <= 0.0g after interpolation. "
+                f"These bridges will show zero damage probability. Check that all bridges "
+                f"fall within the ShakeMap spatial extent.",
+                RuntimeWarning,
+                stacklevel=1,
+            )
 
     # Also keep legacy aliases for backward compatibility
     if "im_SA10" in nbi.columns:
