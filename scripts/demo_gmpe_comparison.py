@@ -70,7 +70,7 @@ im_col = IM_COLUMN_MAP["SA10"]
 nbi["im_shakemap"] = interpolate_im(
     sm["LAT"].values, sm["LON"].values, sm[im_col].values,
     nbi["latitude"].values, nbi["longitude"].values,
-    method="nearest",
+    method="kriging",
 )
 
 # ── Path B: BSSA21 GMPE ──
@@ -99,7 +99,7 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
 
 vmin, vmax = 0, min(nbi["im_shakemap"].quantile(0.98), 1.2)
 
-INTERP_METHOD = "nearest"  # interpolation method used
+INTERP_METHOD = "kriging"  # interpolation method used
 
 for ax, col, title_label in [
     (ax1, "im_shakemap", f"Path A: ShakeMap Interpolation\nSa(1.0s) — method: {INTERP_METHOD}"),
