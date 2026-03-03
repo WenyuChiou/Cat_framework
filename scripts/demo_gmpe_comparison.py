@@ -21,6 +21,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 import numpy as np
 import pandas as pd
 import matplotlib
+import contextily as ctx
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -92,29 +93,34 @@ nbi["ratio_sm_gmpe"] = nbi["im_shakemap"] / nbi["im_gmpe"].replace(0, np.nan)
 print("IM computation complete.\n")
 
 # ══════════════════════════════════════════════════════════════════════
-# Plot 1: Side-by-side spatial IM maps
+# Plot 1: Side-by-side spatial IM maps (with basemap)
 # ══════════════════════════════════════════════════════════════════════
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
 
 vmin, vmax = 0, min(nbi["im_shakemap"].quantile(0.98), 1.2)
 
-sc1 = ax1.scatter(nbi["longitude"], nbi["latitude"], c=nbi["im_shakemap"],
-                  cmap="YlOrRd", s=8, vmin=vmin, vmax=vmax, alpha=0.8)
-ax1.plot(EQ_LON, EQ_LAT, "k*", markersize=18, label="Epicenter")
-ax1.set_title("Path A: ShakeMap Interpolation\nSa(1.0s)", fontsize=13, fontweight="bold")
-ax1.set_xlabel("Longitude")
-ax1.set_ylabel("Latitude")
-ax1.legend(fontsize=10)
-plt.colorbar(sc1, ax=ax1, label="Sa(1.0s) [g]", shrink=0.8)
+INTERP_METHOD = "nearest"  # interpolation method used
 
-sc2 = ax2.scatter(nbi["longitude"], nbi["latitude"], c=nbi["im_gmpe"],
-                  cmap="YlOrRd", s=8, vmin=vmin, vmax=vmax, alpha=0.8)
-ax2.plot(EQ_LON, EQ_LAT, "k*", markersize=18, label="Epicenter")
-ax2.set_title("Path B: BSSA21 GMPE Prediction\nSa(1.0s)", fontsize=13, fontweight="bold")
-ax2.set_xlabel("Longitude")
-ax2.set_ylabel("Latitude")
-ax2.legend(fontsize=10)
-plt.colorbar(sc2, ax=ax2, label="Sa(1.0s) [g]", shrink=0.8)
+for ax, col, title_label in [
+    (ax1, "im_shakemap", f"Path A: ShakeMap Interpolation\nSa(1.0s) — method: {INTERP_METHOD}"),
+    (ax2, "im_gmpe",     "Path B: BSSA21 GMPE Prediction\nSa(1.0s) — point-source R_JB"),
+]:
+    sc = ax.scatter(nbi["longitude"], nbi["latitude"], c=nbi[col],
+                    cmap="YlOrRd", s=10, vmin=vmin, vmax=vmax, alpha=0.85, zorder=3)
+    ax.plot(EQ_LON, EQ_LAT, "k*", markersize=18, label="Epicenter", zorder=5)
+    ax.set_title(title_label, fontsize=12, fontweight="bold")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.legend(fontsize=9, loc="lower right", framealpha=0.9)
+    plt.colorbar(sc, ax=ax, label="Sa(1.0s) [g]", shrink=0.75)
+    # Set extent for basemap
+    ax.set_xlim(nbi["longitude"].min() - 0.02, nbi["longitude"].max() + 0.02)
+    ax.set_ylim(nbi["latitude"].min() - 0.02, nbi["latitude"].max() + 0.02)
+    try:
+        ctx.add_basemap(ax, crs="EPSG:4326", source=ctx.providers.CartoDB.Positron,
+                        zoom=11, alpha=0.5)
+    except Exception as e:
+        print(f"  Basemap warning: {e} (plot still saved without basemap)")
 
 fig.suptitle("CAT411: ShakeMap vs BSSA21 GMPE — Spatial IM Distribution\n"
              "1994 Northridge Earthquake (Mw 6.7)", fontsize=14, fontweight="bold", y=1.02)
@@ -229,14 +235,14 @@ plt.close()
 print("Saved: 04_im_histogram.png")
 
 # ══════════════════════════════════════════════════════════════════════
-# Plot 5: Residual map (ShakeMap / GMPE ratio)
+# Plot 5: Residual map (ShakeMap / GMPE ratio) with basemap
 # ══════════════════════════════════════════════════════════════════════
 fig, ax = plt.subplots(figsize=(10, 8))
 valid = nbi["ratio_sm_gmpe"].notna() & (nbi["ratio_sm_gmpe"] < 10)
 sc = ax.scatter(nbi.loc[valid, "longitude"], nbi.loc[valid, "latitude"],
                 c=np.log2(nbi.loc[valid, "ratio_sm_gmpe"]),
-                cmap="RdBu_r", s=8, alpha=0.8, vmin=-2, vmax=2)
-ax.plot(EQ_LON, EQ_LAT, "k*", markersize=18, label="Epicenter")
+                cmap="RdBu_r", s=10, alpha=0.85, vmin=-2, vmax=2, zorder=3)
+ax.plot(EQ_LON, EQ_LAT, "k*", markersize=18, label="Epicenter", zorder=5)
 cb = plt.colorbar(sc, ax=ax, shrink=0.8)
 cb.set_label("log2(ShakeMap / GMPE)", fontsize=11)
 cb.set_ticks([-2, -1, 0, 1, 2])
@@ -245,7 +251,19 @@ ax.set_xlabel("Longitude")
 ax.set_ylabel("Latitude")
 ax.set_title("Spatial Residual: ShakeMap / BSSA21 GMPE\n"
              "Red = ShakeMap higher, Blue = GMPE higher", fontsize=13, fontweight="bold")
-ax.legend(fontsize=10)
+ax.legend(fontsize=10, loc="lower right", framealpha=0.9)
+# Basemap
+ax.set_xlim(nbi["longitude"].min() - 0.02, nbi["longitude"].max() + 0.02)
+ax.set_ylim(nbi["latitude"].min() - 0.02, nbi["latitude"].max() + 0.02)
+try:
+    ctx.add_basemap(ax, crs="EPSG:4326", source=ctx.providers.CartoDB.Positron,
+                    zoom=11, alpha=0.5)
+except Exception as e:
+    print(f"  Basemap warning: {e} (plot still saved without basemap)")
+# Annotation: interpolation method
+ax.text(0.02, 0.02, f"ShakeMap interp: {INTERP_METHOD}",
+        transform=ax.transAxes, fontsize=9, va="bottom",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 plt.tight_layout()
 fig.savefig(os.path.join(OUT_DIR, "05_residual_map.png"), dpi=200, bbox_inches="tight")
 plt.close()
