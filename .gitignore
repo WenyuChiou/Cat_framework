@@ -30,6 +30,7 @@ ref/
 
 # Claude Code local settings
 .claude/
+.ai/
 
 # IDE
 .vscode/
