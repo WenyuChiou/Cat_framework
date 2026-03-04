@@ -6,6 +6,9 @@ __pycache__/
 # Generated outputs (re-created by running main.py)
 output/
 
+# Vs30 data (large global grid, download via: python -m src.vs30_provider --download)
+data/vs30/global_vs30.grd
+
 # Data files (large, downloaded via --download)
 data/plots/
 data/grid.xml
