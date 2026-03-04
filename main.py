@@ -365,6 +365,18 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
         )
         default_vs30 = float(sc.get("vs30", 760.0))
 
+        # Enrich bridges with spatial Vs30 if available
+        if "vs30" not in nbi.columns:
+            try:
+                from src.vs30_provider import enrich_bridges_with_vs30
+                enrich_bridges_with_vs30(nbi)
+                print(f"[Analysis] Vs30 from USGS spatial grid: "
+                      f"mean={nbi['vs30'].mean():.0f} m/s, "
+                      f"range={nbi['vs30'].min():.0f}–{nbi['vs30'].max():.0f} m/s")
+            except FileNotFoundError:
+                print(f"[Analysis] Vs30 spatial data not available, "
+                      f"using default {default_vs30} m/s")
+
         print(f"\n[Analysis] Computing ground motion via GMPE "
               f"(model: {config.gmpe_model}, IM: {config.im_type}, "
               f"Mw={scenario.Mw})...")
