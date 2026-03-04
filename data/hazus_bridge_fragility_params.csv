@@ -1,16 +1,29 @@
-HWB_Class,Name,Slight_Median,Moderate_Median,Extensive_Median,Complete_Median,Beta
-HWB1,Major Bridge - Conventional Design (>150m),0.25,0.35,0.45,0.7,0.6
-HWB2,Major Bridge - Seismic Design (>150m),0.35,0.45,0.55,0.8,0.6
-HWB3,"Single Span - Concrete, Conventional Design",0.6,0.9,1.1,1.5,0.6
-HWB4,"Single Span - Concrete, Seismic Design",0.9,0.9,1.1,1.5,0.6
-HWB5,Multi-Span Concrete Continuous - Conventional Design,0.35,0.45,0.55,0.8,0.6
-HWB6,Multi-Span Concrete Continuous - Seismic Design,0.6,0.9,1.3,1.6,0.6
-HWB7,Multi-Span Concrete Simply-Supported - Conventional Design,0.35,0.45,0.55,0.8,0.6
-HWB8,Multi-Span Concrete Simply-Supported - Seismic Design,0.6,0.9,1.3,1.6,0.6
-HWB10,Multi-Span Steel Continuous - Conventional Design,0.35,0.45,0.55,0.8,0.6
-HWB11,Multi-Span Steel Continuous - Seismic Design,0.6,0.9,1.1,1.5,0.6
-HWB15,"Single Span - Steel, Conventional Design",0.6,0.9,1.1,1.5,0.6
-HWB16,"Single Span - Steel, Seismic Design",0.9,0.9,1.1,1.5,0.6
-HWB17,Multi-Span Concrete Continuous Box Girder - Conventional Design,0.35,0.45,0.55,0.8,0.6
-HWB22,Multi-Span Concrete Continuous Frame - Conventional Design,0.35,0.45,0.55,0.8,0.6
-HWB28,All Others,0.35,0.45,0.55,0.8,0.6
+HWB_Class,Name,slight_median,slight_beta,moderate_median,moderate_beta,extensive_median,extensive_beta,complete_median,complete_beta
+HWB1,Major Bridge - Conventional Design (>150m),0.4,0.6,0.5,0.6,0.7,0.6,0.9,0.6
+HWB2,Major Bridge - Seismic Design (>150m),0.6,0.6,0.9,0.6,1.1,0.6,1.7,0.6
+HWB3,Single Span - Conventional Design,0.8,0.6,1.0,0.6,1.2,0.6,1.7,0.6
+HWB4,Single Span - Seismic Design,0.8,0.6,1.0,0.6,1.2,0.6,1.7,0.6
+HWB5,"Multi-Col. Bent, Simple Support - Concrete, Conventional (Non-CA)",0.25,0.6,0.35,0.6,0.45,0.6,0.7,0.6
+HWB6,"Multi-Col. Bent, Simple Support - Concrete, Conventional (CA)",0.3,0.6,0.5,0.6,0.6,0.6,0.9,0.6
+HWB7,"Multi-Col. Bent, Simple Support - Concrete, Seismic",0.5,0.6,0.8,0.6,1.1,0.6,1.7,0.6
+HWB8,"Single Col., Box Girder - Continuous Concrete, Conventional (CA)",0.35,0.6,0.45,0.6,0.55,0.6,0.8,0.6
+HWB9,"Single Col., Box Girder - Continuous Concrete, Seismic (CA)",0.6,0.6,0.9,0.6,1.3,0.6,1.6,0.6
+HWB10,Continuous Concrete - Conventional Design,0.6,0.6,0.9,0.6,1.1,0.6,1.5,0.6
+HWB11,Continuous Concrete - Seismic Design,0.9,0.6,0.9,0.6,1.1,0.6,1.5,0.6
+HWB12,"Multi-Col. Bent, Simple Support - Steel, Conventional (Non-CA)",0.25,0.6,0.35,0.6,0.45,0.6,0.7,0.6
+HWB13,"Multi-Col. Bent, Simple Support - Steel, Conventional (CA)",0.3,0.6,0.5,0.6,0.6,0.6,0.9,0.6
+HWB14,"Multi-Col. Bent, Simple Support - Steel, Seismic",0.5,0.6,0.8,0.6,1.1,0.6,1.7,0.6
+HWB15,Continuous Steel - Conventional Design,0.75,0.6,0.75,0.6,0.75,0.6,1.1,0.6
+HWB16,Continuous Steel - Seismic Design,0.9,0.6,0.9,0.6,1.1,0.6,1.5,0.6
+HWB17,"Multi-Col. Bent, Simple Support - Prestressed Concrete, Conventional (Non-CA)",0.25,0.6,0.35,0.6,0.45,0.6,0.7,0.6
+HWB18,"Multi-Col. Bent, Simple Support - Prestressed Concrete, Conventional (CA)",0.3,0.6,0.5,0.6,0.6,0.6,0.9,0.6
+HWB19,"Multi-Col. Bent, Simple Support - Prestressed Concrete, Seismic",0.5,0.6,0.8,0.6,1.1,0.6,1.7,0.6
+HWB20,"Single Col., Box Girder - Prestressed Continuous Concrete, Conventional (CA)",0.35,0.6,0.45,0.6,0.55,0.6,0.8,0.6
+HWB21,"Single Col., Box Girder - Prestressed Continuous Concrete, Seismic (CA)",0.6,0.6,0.9,0.6,1.3,0.6,1.6,0.6
+HWB22,Continuous Prestressed Concrete - Conventional Design,0.6,0.6,0.9,0.6,1.1,0.6,1.5,0.6
+HWB23,Continuous Prestressed Concrete - Seismic Design,0.9,0.6,0.9,0.6,1.1,0.6,1.5,0.6
+HWB24,"Multi-Col. Bent, Simple Support - Steel, Short (<20m), Conventional (Non-CA)",0.25,0.6,0.35,0.6,0.45,0.6,0.7,0.6
+HWB25,"Multi-Col. Bent, Simple Support - Steel, Short (<20m), Conventional (CA)",0.3,0.6,0.5,0.6,0.6,0.6,0.9,0.6
+HWB26,"Continuous Steel, Short (<20m), Conventional (Non-CA)",0.75,0.6,0.75,0.6,0.75,0.6,1.1,0.6
+HWB27,"Continuous Steel, Short (<20m), Conventional (CA)",0.75,0.6,0.75,0.6,0.75,0.6,1.1,0.6
+HWB28,All Other Bridges (unclassified),0.8,0.6,1.0,0.6,1.2,0.6,1.7,0.6
