@@ -944,6 +944,937 @@ def _plot_residual_vs_distance(per_bridge, output_dir, plt):
     return path
 
 
+##############################################################################
+# Level 1 — GMPE Component Validation (stations)
+##############################################################################
+
+def validate_gmpe_stations(
+    stationlist_path: str,
+    config,
+    gmpe_model: str = "bssa21",
+) -> dict:
+    """
+    Level 1: Compare BSSA21 predictions vs 185 seismic station observations.
+
+    Parameters
+    ----------
+    stationlist_path : str
+        Path to USGS stationlist.json.
+    config : AnalysisConfig
+        Analysis configuration (provides gmpe_scenario).
+    gmpe_model : str
+        GMPE model name (default: bssa21).
+
+    Returns
+    -------
+    dict with level, metrics, per_station DataFrame, comparison_vs_shakemap.
+    """
+    from src.stationlist_parser import parse_stationlist
+    from src.gmpe_bssa21 import BSSA21
+
+    stations = parse_stationlist(stationlist_path, station_type="seismic")
+    if len(stations) == 0:
+        print("[L1] No seismic stations found.")
+        return {"level": 1, "metrics": {}, "per_station": pd.DataFrame(),
+                "comparison_vs_shakemap": {}}
+
+    sc = getattr(config, "gmpe_scenario", None) or {
+        "Mw": 6.7, "lat": 34.213, "lon": -118.537,
+        "depth_km": 18.4, "fault_type": "reverse", "vs30": 360.0,
+    }
+
+    bssa = BSSA21()
+    eq_mw = sc.get("Mw", 6.7)
+    eq_fault = sc.get("fault_type", "reverse")
+    target_period = 1.0  # Sa(1.0s)
+
+    our_pred = np.empty(len(stations))
+    our_sigma = np.empty(len(stations))
+    for i, (_, row) in enumerate(stations.iterrows()):
+        rjb = row["rjb"]
+        if pd.isna(rjb) or rjb < 0.1:
+            rjb = 0.1
+        vs30 = row["vs30"] if pd.notna(row["vs30"]) else 360.0
+        med_g, sig = bssa.compute(eq_mw, rjb, vs30, eq_fault, target_period)
+        our_pred[i] = med_g
+        our_sigma[i] = sig
+
+    stations["our_pred_sa10"] = our_pred
+    stations["our_sigma_sa10"] = our_sigma
+
+    # Residuals in ln space
+    obs = stations["obs_sa10"].values
+    pred_ours = stations["our_pred_sa10"].values
+    pred_sm = stations["pred_sa10"].values
+
+    # Filter out invalid values
+    valid = (obs > 0) & (pred_ours > 0) & (pred_sm > 0)
+    obs_v = obs[valid]
+    pred_ours_v = pred_ours[valid]
+    pred_sm_v = pred_sm[valid]
+
+    ln_obs = np.log(obs_v)
+    ln_pred_ours = np.log(pred_ours_v)
+    ln_pred_sm = np.log(pred_sm_v)
+
+    residual_ours = ln_obs - ln_pred_ours
+    residual_sm = ln_obs - ln_pred_sm
+
+    stations["residual_ln"] = np.nan
+    stations.loc[valid, "residual_ln"] = residual_ours
+    stations["ratio_obs_pred"] = np.nan
+    stations.loc[valid, "ratio_obs_pred"] = obs_v / pred_ours_v
+
+    metrics = {
+        "mean_residual": float(np.mean(residual_ours)),
+        "std_residual": float(np.std(residual_ours)),
+        "median_ratio": float(np.median(obs_v / pred_ours_v)),
+        "rmse_ln": float(np.sqrt(np.mean(residual_ours**2))),
+        "n_stations": int(valid.sum()),
+        "inter_event_tau": float(np.mean(stations.loc[valid, "pred_ln_tau_sa10"].values)),
+        "intra_event_phi": float(np.mean(stations.loc[valid, "pred_ln_phi_sa10"].values)),
+        "total_sigma": float(np.mean(stations.loc[valid, "pred_ln_sigma_sa10"].values)),
+    }
+
+    # Comparison: our BSSA21 vs ShakeMap's built-in GMPE
+    diff_ln = ln_pred_ours - ln_pred_sm
+    comparison = {
+        "mean_diff_ln": float(np.mean(diff_ln)),
+        "std_diff_ln": float(np.std(diff_ln)),
+        "correlation": float(np.corrcoef(pred_ours_v, pred_sm_v)[0, 1]),
+    }
+
+    # Print summary
+    print(f"\n{'=' * 70}")
+    print(f"LEVEL 1: GMPE COMPONENT VALIDATION (N={metrics['n_stations']} seismic stations)")
+    print(f"{'=' * 70}")
+    print(f"  Mean residual (ln):     {metrics['mean_residual']:+.3f}")
+    print(f"  Std residual (ln):      {metrics['std_residual']:.3f}")
+    print(f"  RMSE (ln):              {metrics['rmse_ln']:.3f}")
+    print(f"  Median obs/pred ratio:  {metrics['median_ratio']:.3f}")
+    print(f"  ShakeMap avg tau/phi/sigma: "
+          f"{metrics['inter_event_tau']:.3f}/{metrics['intra_event_phi']:.3f}"
+          f"/{metrics['total_sigma']:.3f}")
+    print(f"  Our BSSA21 vs SM GMPE:  mean diff(ln)={comparison['mean_diff_ln']:+.3f}, "
+          f"r={comparison['correlation']:.3f}")
+    print(f"{'=' * 70}")
+
+    return {
+        "level": 1,
+        "metrics": metrics,
+        "per_station": stations,
+        "comparison_vs_shakemap": comparison,
+    }
+
+
+def plot_level1_gmpe(results: dict, output_dir: str) -> list[str]:
+    """
+    Generate 5 Level 1 GMPE validation plots.
+
+    1. Attenuation curve + station observations
+    2. Residual vs Rjb distance
+    3. Residual vs Vs30
+    4. Residual histogram
+    5. Our BSSA21 vs ShakeMap GMPE scatter
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(output_dir, exist_ok=True)
+    saved = []
+
+    stations = results.get("per_station")
+    if stations is None or len(stations) == 0:
+        return saved
+
+    valid = stations["residual_ln"].notna()
+    df = stations[valid].copy()
+    if len(df) == 0:
+        return saved
+
+    # ── 1. Attenuation curve + observations ──
+    fig, ax = plt.subplots(figsize=(10, 7))
+    from src.gmpe_bssa21 import BSSA21
+    bssa = BSSA21()
+    r_range = np.logspace(-0.5, 2.2, 200)
+    pred_curve = np.array([bssa.compute(6.7, r, 360.0, "reverse", 1.0)[0] for r in r_range])
+    ax.plot(r_range, pred_curve, "k-", linewidth=2, label="BSSA21 median (Vs30=360)")
+
+    # +/- 1 sigma
+    _, sig0 = bssa.compute(6.7, 10.0, 360.0, "reverse", 1.0)
+    upper = pred_curve * np.exp(sig0)
+    lower = pred_curve * np.exp(-sig0)
+    ax.fill_between(r_range, lower, upper, alpha=0.15, color="gray", label=f"±1σ (σ={sig0:.2f})")
+
+    # Color by Vs30
+    vs30_vals = df["vs30"].values
+    sc = ax.scatter(df["rjb"], df["obs_sa10"], c=vs30_vals, cmap="coolwarm_r",
+                    s=30, edgecolors="black", linewidths=0.3, alpha=0.8,
+                    vmin=200, vmax=800, zorder=5)
+    fig.colorbar(sc, ax=ax, shrink=0.7, label="Vs30 (m/s)")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("R_JB (km)")
+    ax.set_ylabel("Sa(1.0s) (g)")
+    ax.set_title("Level 1: Attenuation Curve + Seismic Station Observations\n"
+                 "Northridge Mw 6.7, BSSA21")
+    ax.legend(loc="upper right")
+    ax.set_xlim(0.3, 200)
+    ax.set_ylim(0.005, 3.0)
+    ax.grid(True, alpha=0.3, which="both")
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L1_01_attenuation.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    # ── 2. Residual vs distance ──
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.scatter(df["rjb"], df["residual_ln"], alpha=0.6, s=25, c="steelblue",
+               edgecolors="black", linewidths=0.3)
+    ax.axhline(0, color="red", linestyle="--", linewidth=1.5)
+
+    # Moving average
+    df_s = df.sort_values("rjb")
+    if len(df_s) >= 10:
+        window = max(5, len(df_s) // 8)
+        rolling = df_s["residual_ln"].rolling(window, center=True).mean()
+        ax.plot(df_s["rjb"], rolling, color="orange", linewidth=2,
+                label=f"Moving average (w={window})")
+        ax.legend()
+
+    ax.set_xlabel("R_JB (km)")
+    ax.set_ylabel("Residual: ln(obs) - ln(pred)")
+    ax.set_title(f"Level 1: GMPE Residual vs Distance (N={len(df)})")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L1_02_residual_dist.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    # ── 3. Residual vs Vs30 ──
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.scatter(df["vs30"], df["residual_ln"], alpha=0.6, s=25, c="teal",
+               edgecolors="black", linewidths=0.3)
+    ax.axhline(0, color="red", linestyle="--", linewidth=1.5)
+
+    # NEHRP boundaries
+    nehrp = {"B/C": 760, "C/D": 360, "D/E": 180}
+    for label, v in nehrp.items():
+        ax.axvline(v, color="gray", linestyle=":", linewidth=1, alpha=0.7)
+        ax.text(v + 5, ax.get_ylim()[1] * 0.9, label, fontsize=8, color="gray")
+
+    ax.set_xlabel("Vs30 (m/s)")
+    ax.set_ylabel("Residual: ln(obs) - ln(pred)")
+    ax.set_title(f"Level 1: GMPE Residual vs Vs30 (N={len(df)})")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L1_03_residual_vs30.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    # ── 4. Residual histogram + normal fit ──
+    fig, ax = plt.subplots(figsize=(8, 6))
+    residuals = df["residual_ln"].values
+    n_bins = min(30, max(10, len(residuals) // 5))
+    ax.hist(residuals, bins=n_bins, density=True, alpha=0.7, color="steelblue",
+            edgecolor="black", label="Observed residuals")
+
+    # Normal fit
+    mu, sigma = np.mean(residuals), np.std(residuals)
+    x = np.linspace(mu - 4 * sigma, mu + 4 * sigma, 200)
+    pdf = (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+    ax.plot(x, pdf, "r-", linewidth=2,
+            label=f"Normal fit (μ={mu:+.2f}, σ={sigma:.2f})")
+
+    ax.axvline(0, color="green", linestyle="--", linewidth=1.5, label="Zero (unbiased)")
+    ax.set_xlabel("Residual: ln(obs) - ln(pred)")
+    ax.set_ylabel("Density")
+    ax.set_title(f"Level 1: Residual Distribution (N={len(residuals)})")
+    ax.legend()
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L1_04_residual_hist.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    # ── 5. Our BSSA21 vs ShakeMap GMPE scatter ──
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.scatter(df["pred_sa10"], df["our_pred_sa10"], alpha=0.6, s=25,
+               c="darkorchid", edgecolors="black", linewidths=0.3)
+    lims = [0.005, max(df["pred_sa10"].max(), df["our_pred_sa10"].max()) * 1.2]
+    ax.plot(lims, lims, "k--", linewidth=1.5, label="1:1 line")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("ShakeMap GMPE Sa(1.0s) (g)")
+    ax.set_ylabel("Our BSSA21 Sa(1.0s) (g)")
+    comp = results.get("comparison_vs_shakemap", {})
+    ax.set_title(f"Level 1: Our BSSA21 vs ShakeMap GMPE\n"
+                 f"Δln={comp.get('mean_diff_ln', 0):+.3f}, "
+                 f"r={comp.get('correlation', 0):.3f}")
+    ax.legend()
+    ax.set_aspect("equal")
+    ax.grid(True, alpha=0.3, which="both")
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L1_05_bssa21_vs_sm.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    return saved
+
+
+##############################################################################
+# Level 2 — Event-Level Damage Distribution Validation
+##############################################################################
+
+def validate_event_damage(
+    bridges_csv_path: str,
+    config,
+    reference_stats: Optional[dict] = None,
+) -> dict:
+    """
+    Level 2: Compare aggregate predicted damage distribution vs Basoz (1998).
+
+    Parameters
+    ----------
+    bridges_csv_path : str
+        Path to full bridge inventory CSV (2,123 bridges with sa1s_shakemap + hwb_class).
+    config : AnalysisConfig
+        Analysis configuration.
+    reference_stats : dict, optional
+        Override reference damage fractions. Defaults to NORTHRIDGE_DAMAGE_STATS.
+
+    Returns
+    -------
+    dict with level, metrics, predicted/observed distributions, per_bridge DataFrame.
+    """
+    from src.northridge_case import NORTHRIDGE_DAMAGE_STATS
+
+    if reference_stats is None:
+        reference_stats = NORTHRIDGE_DAMAGE_STATS
+
+    # Load full bridge inventory
+    df = pd.read_csv(bridges_csv_path, encoding="utf-8")
+    print(f"[L2] Loaded {len(df)} bridges from {bridges_csv_path}")
+
+    # Need sa1s_shakemap and hwb_class
+    if "sa1s_shakemap" not in df.columns:
+        print("[L2] WARNING: 'sa1s_shakemap' column not found. Cannot compute Level 2.")
+        return {"level": 2, "metrics": {}, "predicted_distribution": {},
+                "observed_distribution": {}, "per_bridge": pd.DataFrame()}
+
+    if "hwb_class" not in df.columns:
+        print("[L2] WARNING: 'hwb_class' column not found. Cannot compute Level 2.")
+        return {"level": 2, "metrics": {}, "predicted_distribution": {},
+                "observed_distribution": {}, "per_bridge": pd.DataFrame()}
+
+    # Filter to bridges with valid SA and HWB
+    valid = df["sa1s_shakemap"].notna() & (df["sa1s_shakemap"] > 0) & df["hwb_class"].notna()
+    df_valid = df[valid].copy()
+    print(f"[L2] Valid bridges (SA > 0 + HWB): {len(df_valid)}")
+
+    # Compute damage probabilities for each bridge
+    prob_cols = {ds: [] for ds in DS_ORDER}
+    pred_ds_list = []
+    expected_idx_list = []
+
+    for _, row in df_valid.iterrows():
+        sa = float(row["sa1s_shakemap"])
+        hwb = str(row["hwb_class"])
+        probs = damage_state_probabilities(sa, hwb)
+
+        for ds in DS_ORDER:
+            prob_cols[ds].append(probs[ds])
+
+        pred_ds = max(DS_ORDER, key=lambda d: probs[d])
+        pred_ds_list.append(pred_ds)
+        expected_idx_list.append(sum(DS_INDEX[d] * probs[d] for d in DS_ORDER))
+
+    for ds in DS_ORDER:
+        df_valid[f"p_{ds}"] = prob_cols[ds]
+    df_valid["predicted_ds"] = pred_ds_list
+    df_valid["expected_idx"] = expected_idx_list
+
+    # Aggregate: probability-expectation method
+    pred_dist = {ds: float(np.mean(prob_cols[ds])) for ds in DS_ORDER}
+    obs_dist = reference_stats.get("observed_damage_fractions", {})
+
+    # Compute distance from epicenter if lat/lon available
+    if "latitude" in df_valid.columns and "longitude" in df_valid.columns:
+        sc = getattr(config, "gmpe_scenario", None) or {"lat": 34.213, "lon": -118.537}
+        eq_lat, eq_lon = sc.get("lat", 34.213), sc.get("lon", -118.537)
+        df_valid["r_epi_km"] = df_valid.apply(
+            lambda r: haversine_km(r["latitude"], r["longitude"], eq_lat, eq_lon)
+            if pd.notna(r["latitude"]) else np.nan, axis=1)
+
+    # Chi-squared test
+    # Merge extensive+complete for chi-squared (low expected counts)
+    pred_counts = np.array([pred_dist[ds] * len(df_valid) for ds in DS_ORDER])
+    obs_fracs = np.array([obs_dist.get(ds, 0) for ds in DS_ORDER])
+    obs_counts = obs_fracs * reference_stats.get("total_bridges_in_area", 1600)
+
+    # Merge last two categories if expected < 5
+    if pred_counts[-1] < 5 or obs_counts[-1] < 5:
+        pred_counts_merged = np.concatenate([pred_counts[:-2], [pred_counts[-2] + pred_counts[-1]]])
+        obs_counts_merged = np.concatenate([obs_counts[:-2], [obs_counts[-2] + obs_counts[-1]]])
+    else:
+        pred_counts_merged = pred_counts
+        obs_counts_merged = obs_counts
+
+    # Normalize to same total for fair comparison
+    total_n = reference_stats.get("total_bridges_in_area", 1600)
+    pred_norm = (pred_counts_merged / pred_counts_merged.sum()) * total_n
+    obs_norm = (obs_counts_merged / obs_counts_merged.sum()) * total_n
+
+    from scipy import stats as sp_stats
+    # Chi-squared: compare predicted vs observed distributions
+    # Use observed as expected frequencies
+    chi2_stat = float(np.sum((pred_norm - obs_norm) ** 2 / np.maximum(obs_norm, 1)))
+    chi2_dof = len(pred_norm) - 1
+    chi2_pval = float(1.0 - sp_stats.chi2.cdf(chi2_stat, chi2_dof))
+
+    # KL divergence: D_KL(pred || obs)
+    pred_f = np.array([pred_dist[ds] for ds in DS_ORDER])
+    obs_f = np.array([obs_dist.get(ds, 0) for ds in DS_ORDER])
+    # Smooth zeros
+    eps = 1e-8
+    pred_f = np.clip(pred_f, eps, None)
+    obs_f = np.clip(obs_f, eps, None)
+    pred_f = pred_f / pred_f.sum()
+    obs_f = obs_f / obs_f.sum()
+    kl_div = float(np.sum(pred_f * np.log(pred_f / obs_f)))
+
+    # Total damage ratio
+    damage_weights = {"none": 0, "slight": 0.03, "moderate": 0.08, "extensive": 0.25, "complete": 1.0}
+    tdr_pred = sum(pred_dist[ds] * damage_weights[ds] for ds in DS_ORDER)
+    tdr_obs = sum(obs_dist.get(ds, 0) * damage_weights[ds] for ds in DS_ORDER)
+
+    max_err = max(abs(pred_dist[ds] - obs_dist.get(ds, 0)) for ds in DS_ORDER)
+
+    metrics = {
+        "chi_squared": chi2_stat,
+        "chi_squared_pvalue": chi2_pval,
+        "kl_divergence": kl_div,
+        "total_damage_ratio_pred": float(tdr_pred),
+        "total_damage_ratio_obs": float(tdr_obs),
+        "max_category_error": float(max_err),
+    }
+
+    print(f"\n{'=' * 70}")
+    print(f"LEVEL 2: EVENT-LEVEL DAMAGE DISTRIBUTION (N={len(df_valid)} bridges)")
+    print(f"{'=' * 70}")
+    print(f"  {'State':<12} {'Predicted':>10} {'Observed':>10} {'Diff':>10}")
+    print(f"  {'─' * 45}")
+    for ds in DS_ORDER:
+        p = pred_dist[ds]
+        o = obs_dist.get(ds, 0)
+        print(f"  {ds:<12} {p:>10.4f} {o:>10.4f} {p-o:>+10.4f}")
+    print(f"  {'─' * 45}")
+    print(f"  Chi-squared: {chi2_stat:.2f} (p={chi2_pval:.4f})")
+    print(f"  KL divergence: {kl_div:.4f}")
+    print(f"  Total damage ratio: pred={tdr_pred:.4f}, obs={tdr_obs:.4f}")
+    print(f"{'=' * 70}")
+
+    return {
+        "level": 2,
+        "metrics": metrics,
+        "predicted_distribution": pred_dist,
+        "observed_distribution": dict(obs_dist),
+        "per_bridge": df_valid,
+    }
+
+
+def plot_level2_event(results: dict, output_dir: str) -> list[str]:
+    """
+    Generate 3 Level 2 event-level damage validation plots.
+
+    1. Predicted vs observed damage distribution bar chart
+    2. Damage rate vs distance
+    3. Damage index by HWB class
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(output_dir, exist_ok=True)
+    saved = []
+
+    pred_dist = results.get("predicted_distribution", {})
+    obs_dist = results.get("observed_distribution", {})
+    per_bridge = results.get("per_bridge")
+    metrics = results.get("metrics", {})
+
+    if not pred_dist or not obs_dist:
+        return saved
+
+    ds_colors = {
+        "none": "#2ecc71", "slight": "#f1c40f", "moderate": "#e67e22",
+        "extensive": "#e74c3c", "complete": "#8e44ad",
+    }
+
+    # ── 1. Side-by-side bar chart ──
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(len(DS_ORDER))
+    width = 0.35
+    pred_vals = [pred_dist.get(ds, 0) for ds in DS_ORDER]
+    obs_vals = [obs_dist.get(ds, 0) for ds in DS_ORDER]
+
+    bars1 = ax.bar(x - width / 2, pred_vals, width, label="Predicted (this model)",
+                   color="steelblue", edgecolor="black", linewidth=0.5)
+    bars2 = ax.bar(x + width / 2, obs_vals, width, label="Observed (Basoz 1998)",
+                   color="coral", edgecolor="black", linewidth=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([ds.capitalize() for ds in DS_ORDER])
+    ax.set_ylabel("Fraction of Bridges")
+    ax.set_title(f"Level 2: Predicted vs Observed Damage Distribution\n"
+                 f"χ²={metrics.get('chi_squared', 0):.2f}, "
+                 f"p={metrics.get('chi_squared_pvalue', 0):.4f}, "
+                 f"KL={metrics.get('kl_divergence', 0):.4f}")
+    ax.legend()
+
+    # Value labels
+    for bar_set in [bars1, bars2]:
+        for bar in bar_set:
+            h = bar.get_height()
+            if h > 0.005:
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                        f"{h:.3f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_ylim(0, max(max(pred_vals), max(obs_vals)) * 1.2)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L2_01_damage_dist.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    if per_bridge is None or len(per_bridge) == 0:
+        return saved
+
+    # ── 2. Damage rate vs distance ──
+    if "r_epi_km" in per_bridge.columns:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        df = per_bridge[per_bridge["r_epi_km"].notna()].copy()
+        if len(df) > 0:
+            dist_bins = [0, 10, 20, 30, 50, 80, 120, 200]
+            dist_labels = ["0-10", "10-20", "20-30", "30-50", "50-80", "80-120", "120+"]
+            df["dist_bin"] = pd.cut(df["r_epi_km"], bins=dist_bins, labels=dist_labels, right=False)
+
+            # Stacked area: mean probability by distance bin
+            bin_probs = []
+            for bl in dist_labels:
+                grp = df[df["dist_bin"] == bl]
+                if len(grp) > 0:
+                    bin_probs.append({ds: grp[f"p_{ds}"].mean() for ds in DS_ORDER})
+                else:
+                    bin_probs.append({ds: 0 for ds in DS_ORDER})
+
+            bottoms = np.zeros(len(dist_labels))
+            for ds in DS_ORDER:
+                vals = [bp[ds] for bp in bin_probs]
+                ax.bar(dist_labels, vals, bottom=bottoms, label=ds.capitalize(),
+                       color=ds_colors[ds], edgecolor="white", linewidth=0.5)
+                bottoms += np.array(vals)
+
+            # Sample count annotations
+            for i, bl in enumerate(dist_labels):
+                n = len(df[df["dist_bin"] == bl])
+                if n > 0:
+                    ax.text(i, bottoms[i] + 0.01, f"n={n}", ha="center", fontsize=7)
+
+            ax.set_xlabel("Epicentral Distance (km)")
+            ax.set_ylabel("Mean Damage Probability")
+            ax.set_title("Level 2: Damage Distribution by Distance")
+            ax.legend(loc="upper right", fontsize=8)
+            ax.set_ylim(0, 1.1)
+            fig.tight_layout()
+            path = os.path.join(output_dir, "validation_L2_02_damage_by_dist.png")
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            saved.append(path)
+            print(f"  Saved: {path}")
+
+    # ── 3. Damage index by HWB class ──
+    if "hwb_class" in per_bridge.columns:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        df = per_bridge.copy()
+        class_stats = df.groupby("hwb_class").agg(
+            n=("expected_idx", "size"),
+            mean_di=("expected_idx", "mean"),
+        ).sort_values("n", ascending=False)
+        # Only classes with >= 5 bridges
+        class_stats = class_stats[class_stats["n"] >= 5]
+
+        if len(class_stats) > 0:
+            colors = plt.cm.RdYlGn_r(np.linspace(0.2, 0.8, len(class_stats)))
+            bars = ax.bar(range(len(class_stats)), class_stats["mean_di"],
+                          color=colors, edgecolor="black", linewidth=0.5)
+            ax.set_xticks(range(len(class_stats)))
+            ax.set_xticklabels(class_stats.index, rotation=45, ha="right")
+            ax.set_ylabel("Mean Expected Damage Index")
+            ax.set_title("Level 2: Predicted Damage Index by HWB Class")
+
+            for i, (_, row) in enumerate(class_stats.iterrows()):
+                ax.text(i, row["mean_di"] + 0.02, f"n={int(row['n'])}",
+                        ha="center", fontsize=7)
+
+            fig.tight_layout()
+            path = os.path.join(output_dir, "validation_L2_03_damage_by_hwb.png")
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            saved.append(path)
+            print(f"  Saved: {path}")
+
+    return saved
+
+
+##############################################################################
+# Level 3 — Per-Bridge Validation (wrapper around existing logic)
+##############################################################################
+
+def validate_per_bridge(
+    bridges_df: pd.DataFrame,
+    config,
+    validation_csv_path: str,
+    shakemap: Optional[pd.DataFrame] = None,
+) -> dict:
+    """
+    Level 3 (supplementary): Per-bridge damage state comparison.
+
+    Wraps existing run_validation logic with a data-quality caveat.
+
+    Returns
+    -------
+    dict with level, metrics, per_bridge DataFrame, caveat string.
+    """
+    # Use existing core logic
+    val_df = load_validation_data(validation_csv_path, nbi_df=bridges_df)
+    confirmed = val_df[val_df["damage_confirmed"] == True].copy()  # noqa: E712
+
+    if len(confirmed) == 0:
+        print("[L3] No confirmed observations found.")
+        return {"level": 3, "metrics": {"accuracy": 0, "mae": 0, "bias": 0},
+                "per_bridge": pd.DataFrame(),
+                "caveat": "No confirmed observations available."}
+
+    print(f"[L3] Confirmed observations: {len(confirmed)}")
+
+    im_source = getattr(config, "validation_im_source", "gmpe")
+    if im_source == "gmpe":
+        results = _validate_with_gmpe(confirmed, config)
+    else:
+        results = _validate_with_pipeline(confirmed, bridges_df)
+        if len(results) == 0 and shakemap is not None:
+            results = _validate_with_shakemap(confirmed, shakemap, config)
+        elif len(results) == 0 and shakemap is None:
+            results = _validate_with_gmpe(confirmed, config)
+
+    if len(results) == 0:
+        return {"level": 3, "metrics": {"accuracy": 0, "mae": 0, "bias": 0},
+                "per_bridge": pd.DataFrame(),
+                "caveat": "No matching bridges for validation."}
+
+    rdf = pd.DataFrame(results)
+    metrics = compute_validation_metrics(rdf["predicted"], rdf["observed"])
+    metrics["per_bridge"] = rdf
+
+    _print_validation_summary(rdf, metrics, config)
+
+    caveat = (
+        "Level 3 per-bridge validation is supplementary. NBI condition-rating "
+        "differences are unreliable proxies for earthquake damage states. "
+        "Accuracy is expected to be low (28-37%) due to data quality issues."
+    )
+
+    return {
+        "level": 3,
+        "metrics": {k: v for k, v in metrics.items() if k != "per_bridge"},
+        "per_bridge": rdf,
+        "caveat": caveat,
+    }
+
+
+def plot_level3_per_bridge(metrics_and_bridge: dict, output_dir: str) -> list[str]:
+    """
+    Generate Level 3 validation plots (renamed from validation_0N to validation_L3_0N).
+
+    Reuses existing plot logic with updated filenames.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+
+    os.makedirs(output_dir, exist_ok=True)
+    saved = []
+
+    per_bridge = metrics_and_bridge.get("per_bridge")
+    level3_metrics = metrics_and_bridge.get("metrics", {})
+
+    if per_bridge is None or len(per_bridge) == 0:
+        return saved
+
+    # Reconstruct metrics dict in the format plot functions expect
+    cm = {}
+    if "observed" in per_bridge.columns and "predicted" in per_bridge.columns:
+        for obs_ds in DS_ORDER:
+            cm[obs_ds] = {}
+            for pred_ds in DS_ORDER:
+                cm[obs_ds][pred_ds] = int(
+                    ((per_bridge["observed"] == obs_ds) & (per_bridge["predicted"] == pred_ds)).sum()
+                )
+
+    plot_metrics = {
+        "accuracy": level3_metrics.get("accuracy", 0),
+        "mae": level3_metrics.get("mae", 0),
+        "bias": level3_metrics.get("bias", 0),
+        "confusion_matrix": cm,
+        "per_bridge": per_bridge,
+    }
+
+    # 1. Confusion matrix
+    if cm:
+        fig, ax = plt.subplots(figsize=(7, 6))
+        labels = DS_ORDER
+        matrix = np.array([[cm.get(obs, {}).get(pred, 0)
+                            for pred in labels] for obs in labels])
+        im = ax.imshow(matrix, cmap="Blues", aspect="auto")
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(labels)
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Observed")
+        ax.set_title(f"L3 Confusion Matrix  (Accuracy: {plot_metrics['accuracy']:.1%}, "
+                     f"MAE: {plot_metrics['mae']:.2f})")
+        for i in range(len(labels)):
+            for j in range(len(labels)):
+                val = matrix[i, j]
+                if val > 0:
+                    color = "white" if val > matrix.max() / 2 else "black"
+                    ax.text(j, i, str(val), ha="center", va="center", color=color)
+        fig.colorbar(im, ax=ax, shrink=0.8, label="Count")
+        fig.tight_layout()
+        path = os.path.join(output_dir, "validation_L3_01_confusion_matrix.png")
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        saved.append(path)
+        print(f"  Saved: {path}")
+
+    # 2. Residual histogram
+    if "error" in per_bridge.columns:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        errors = per_bridge["error"]
+        bins = range(int(errors.min()) - 1, int(errors.max()) + 2)
+        ax.hist(errors, bins=bins, edgecolor="black", alpha=0.7, color="steelblue")
+        ax.axvline(0, color="red", linestyle="--", linewidth=1.5)
+        ax.axvline(errors.mean(), color="orange", linestyle="-", linewidth=1.5,
+                   label=f"Mean bias: {errors.mean():+.2f}")
+        ax.set_xlabel("Prediction Error (predicted - observed DS index)")
+        ax.set_ylabel("Count")
+        ax.set_title(f"L3 Residuals (N={len(errors)}, Bias: {plot_metrics['bias']:+.2f})")
+        ax.legend()
+        fig.tight_layout()
+        path = os.path.join(output_dir, "validation_L3_02_residuals.png")
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        saved.append(path)
+        print(f"  Saved: {path}")
+
+    # 3. Spatial residual
+    if "latitude" in per_bridge.columns and "longitude" in per_bridge.columns:
+        has_coords = per_bridge["latitude"].notna() & per_bridge["longitude"].notna()
+        if has_coords.sum() >= 3 and "error" in per_bridge.columns:
+            df_sp = per_bridge[has_coords]
+            fig, ax = plt.subplots(figsize=(9, 7))
+            errors = df_sp["error"].values
+            vmax = max(abs(errors.min()), abs(errors.max()), 1)
+            norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+            sc = ax.scatter(df_sp["longitude"], df_sp["latitude"], c=errors,
+                            cmap="RdBu_r", norm=norm, s=40,
+                            edgecolors="black", linewidths=0.3, alpha=0.8)
+            fig.colorbar(sc, ax=ax, shrink=0.8, label="Error (pred - obs)")
+            ax.set_xlabel("Longitude")
+            ax.set_ylabel("Latitude")
+            ax.set_title("L3 Spatial Prediction Error")
+            ax.set_aspect("equal")
+            fig.tight_layout()
+            path = os.path.join(output_dir, "validation_L3_03_spatial_residual.png")
+            fig.savefig(path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            saved.append(path)
+            print(f"  Saved: {path}")
+
+    # 4. Damage by IM
+    im_col = None
+    for c in ["im_gmpe", "im_shakemap", "im_selected"]:
+        if c in per_bridge.columns:
+            im_col = c
+            break
+    if im_col:
+        path = _plot_damage_ratio_by_im(per_bridge, im_col, output_dir, plt)
+        if path:
+            # Rename to L3 scheme
+            import shutil
+            new_path = os.path.join(output_dir, "validation_L3_04_damage_by_im.png")
+            shutil.move(path, new_path)
+            saved.append(new_path)
+
+    # 5. Per-class accuracy
+    if "hwb_class" in per_bridge.columns and "correct" in per_bridge.columns:
+        path = _plot_per_class_accuracy(per_bridge, output_dir, plt)
+        if path:
+            import shutil
+            new_path = os.path.join(output_dir, "validation_L3_05_per_class_accuracy.png")
+            shutil.move(path, new_path)
+            saved.append(new_path)
+
+    # 6. Residual vs distance
+    if "r_jb_km" in per_bridge.columns:
+        path = _plot_residual_vs_distance(per_bridge, output_dir, plt)
+        if path:
+            import shutil
+            new_path = os.path.join(output_dir, "validation_L3_06_residual_vs_distance.png")
+            shutil.move(path, new_path)
+            saved.append(new_path)
+
+    return saved
+
+
+##############################################################################
+# Orchestrator — run_full_validation()
+##############################################################################
+
+def run_full_validation(
+    config,
+    bridges_df: Optional[pd.DataFrame] = None,
+    shakemap: Optional[pd.DataFrame] = None,
+    output_dir: str = "output/validation",
+    levels: Optional[list[int]] = None,
+) -> dict[int, dict]:
+    """
+    Execute full 3-level validation.
+
+    Parameters
+    ----------
+    config : AnalysisConfig
+        Analysis configuration.
+    bridges_df : pd.DataFrame, optional
+        NBI bridge data (for Level 3).
+    shakemap : pd.DataFrame, optional
+        ShakeMap grid data (for Level 3 shakemap mode).
+    output_dir : str
+        Directory for output plots and CSVs.
+    levels : list[int], optional
+        Which levels to run. Defaults to config.validation_levels or [1, 2, 3].
+
+    Returns
+    -------
+    dict mapping level number to result dict.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    if levels is None:
+        levels = getattr(config, "validation_levels", [1, 2, 3])
+
+    all_results = {}
+
+    # ── Level 1: GMPE Station Validation ──
+    if 1 in levels:
+        stationlist_path = getattr(config, "validation_stationlist", None)
+        if stationlist_path is None:
+            # Try default path
+            import pathlib
+            default = pathlib.Path(__file__).parent.parent / "data" / "stationlist.json"
+            if default.exists():
+                stationlist_path = str(default)
+
+        if stationlist_path:
+            try:
+                print("\n[Validation] Running Level 1: GMPE Component Validation...")
+                l1 = validate_gmpe_stations(stationlist_path, config)
+                all_results[1] = l1
+                plot_level1_gmpe(l1, output_dir)
+            except Exception as e:
+                print(f"[Validation] Level 1 FAILED: {e}")
+                all_results[1] = {"level": 1, "error": str(e)}
+        else:
+            print("[Validation] Level 1 SKIPPED: no stationlist.json found.")
+
+    # ── Level 2: Event-Level Damage Distribution ──
+    if 2 in levels:
+        val_csv = getattr(config, "validation_data", None)
+        if val_csv:
+            try:
+                print("\n[Validation] Running Level 2: Event-Level Damage Distribution...")
+                l2 = validate_event_damage(val_csv, config)
+                all_results[2] = l2
+                plot_level2_event(l2, output_dir)
+            except Exception as e:
+                print(f"[Validation] Level 2 FAILED: {e}")
+                all_results[2] = {"level": 2, "error": str(e)}
+        else:
+            print("[Validation] Level 2 SKIPPED: no validation data path.")
+
+    # ── Level 3: Per-Bridge Validation ──
+    if 3 in levels:
+        val_csv = getattr(config, "validation_data", None)
+        if val_csv:
+            try:
+                print("\n[Validation] Running Level 3: Per-Bridge Validation...")
+                if bridges_df is None:
+                    bridges_df = pd.DataFrame()
+                l3 = validate_per_bridge(bridges_df, config, val_csv, shakemap)
+                all_results[3] = l3
+                plot_level3_per_bridge(l3, output_dir)
+            except Exception as e:
+                print(f"[Validation] Level 3 FAILED: {e}")
+                all_results[3] = {"level": 3, "error": str(e)}
+        else:
+            print("[Validation] Level 3 SKIPPED: no validation data path.")
+
+    # Summary
+    print(f"\n{'=' * 70}")
+    print("VALIDATION SUMMARY")
+    print(f"{'=' * 70}")
+    for lv in sorted(all_results.keys()):
+        r = all_results[lv]
+        if "error" in r:
+            print(f"  Level {lv}: FAILED — {r['error']}")
+        else:
+            m = r.get("metrics", {})
+            if lv == 1:
+                print(f"  Level 1 (GMPE):  mean_residual={m.get('mean_residual', '?'):+.3f}, "
+                      f"std={m.get('std_residual', '?'):.3f}, "
+                      f"N={m.get('n_stations', 0)}")
+            elif lv == 2:
+                print(f"  Level 2 (Event): chi2={m.get('chi_squared', '?'):.2f}, "
+                      f"p={m.get('chi_squared_pvalue', '?'):.4f}, "
+                      f"KL={m.get('kl_divergence', '?'):.4f}")
+            elif lv == 3:
+                print(f"  Level 3 (Bridge): accuracy={m.get('accuracy', '?'):.1%}, "
+                      f"MAE={m.get('mae', '?'):.2f}, "
+                      f"bias={m.get('bias', '?'):+.2f}")
+    print(f"{'=' * 70}")
+
+    return all_results
+
+
+##############################################################################
+# Existing helper functions (unchanged)
+##############################################################################
+
 def _print_validation_summary(rdf: pd.DataFrame, metrics: dict, config) -> None:
     """Print validation results to console."""
     print(f"\n{'=' * 70}")

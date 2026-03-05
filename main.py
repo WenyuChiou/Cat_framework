@@ -280,17 +280,20 @@ def run_data_analysis(
 
             # ── Validation step (after damage computation) ──
             if config.validation_enabled and config.validation_data:
-                print("\n[Validation] Running validation against observed data...")
-                from src.validation import run_validation, plot_validation_results
-                val_metrics = run_validation(nbi, config, config.validation_data, shakemap=sm)
-                plot_validation_results(val_metrics, OUTPUT_ANALYSIS)
-
-                # Save per-bridge validation results
-                per_bridge = val_metrics.get("per_bridge")
-                if per_bridge is not None and len(per_bridge) > 0:
-                    val_path = os.path.join(OUTPUT_ANALYSIS, "validation_results.csv")
-                    per_bridge.to_csv(val_path, index=False, encoding="utf-8")
-                    print(f"  Saved: {val_path}")
+                print("\n[Validation] Running 3-level validation...")
+                from src.validation import run_full_validation
+                val_output_dir = getattr(config, "validation_output_dir", "output/validation")
+                all_val_results = run_full_validation(
+                    config, bridges_df=nbi, shakemap=sm,
+                    output_dir=val_output_dir,
+                )
+                # Save per-level CSVs
+                for level, result in all_val_results.items():
+                    per_data = result.get("per_bridge") if "per_bridge" in result else result.get("per_station")
+                    if per_data is not None and len(per_data) > 0:
+                        csv_path = os.path.join(val_output_dir, f"validation_L{level}_results.csv")
+                        per_data.to_csv(csv_path, index=False, encoding="utf-8")
+                        print(f"  Saved: {csv_path}")
 
         print()
     else:

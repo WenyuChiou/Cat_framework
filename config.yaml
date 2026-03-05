@@ -119,7 +119,13 @@ analysis:
 
 # ── 10. Validation ──────────────────────────────────────────────
 # Compare pipeline predictions against observed damage data.
+# 3-level validation framework:
+#   Level 1: GMPE component validation (station observations)
+#   Level 2: Event-level damage distribution (Basoz 1998)
+#   Level 3: Per-bridge damage state comparison (supplementary)
 # validation:
 #   enabled: true
 #   data: data/validation/northridge_validation_full.csv
+#   stationlist: data/stationlist.json
+#   levels: [1, 2, 3]
 #   im_source: gmpe          # gmpe or shakemap

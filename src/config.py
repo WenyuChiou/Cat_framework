@@ -64,6 +64,9 @@ class AnalysisConfig:
     validation_enabled: bool = False
     validation_data: Optional[str] = None       # path to validation CSV
     validation_im_source: str = "gmpe"          # "gmpe" or "shakemap"
+    validation_levels: list[int] = field(default_factory=lambda: [1, 2, 3])
+    validation_stationlist: Optional[str] = None  # path to stationlist.json
+    validation_output_dir: str = "output/validation"
 
     @property
     def im_column(self) -> str:
@@ -199,6 +202,12 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
         im_src = str(val.get("im_source", "gmpe")).lower()
         if im_src in ("gmpe", "shakemap"):
             cfg.validation_im_source = im_src
+        if "levels" in val:
+            cfg.validation_levels = list(val["levels"])
+        if "stationlist" in val:
+            cfg.validation_stationlist = val["stationlist"]
+        if "output_dir" in val:
+            cfg.validation_output_dir = val["output_dir"]
 
     validate_config(cfg)
 
