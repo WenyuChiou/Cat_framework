@@ -277,7 +277,21 @@ def run_data_analysis(
                 # 8. Portfolio damage distribution
                 path_pd = plot_portfolio_damage(count_by_ds, len(nbi), output_dir=OUTPUT_ANALYSIS, filename="07_portfolio_damage_bars.png")
                 print(f"  Saved: {path_pd}")
-                
+
+            # ── Validation step (after damage computation) ──
+            if config.validation_enabled and config.validation_data:
+                print("\n[Validation] Running validation against observed data...")
+                from src.validation import run_validation, plot_validation_results
+                val_metrics = run_validation(nbi, config, config.validation_data)
+                plot_validation_results(val_metrics, OUTPUT_ANALYSIS)
+
+                # Save per-bridge validation results
+                per_bridge = val_metrics.get("per_bridge")
+                if per_bridge is not None and len(per_bridge) > 0:
+                    val_path = os.path.join(OUTPUT_ANALYSIS, "validation_results.csv")
+                    per_bridge.to_csv(val_path, index=False, encoding="utf-8")
+                    print(f"  Saved: {val_path}")
+
         print()
     else:
         print(f"[NBI] No NBI file ([A-Z][A-Z]*.txt) found in {DATA_DIR}")
@@ -902,6 +916,11 @@ def main():
         default=None,
         help="Generic NBI column filters as key=value (e.g. --nbi-filter county=037 'year_built>1960')",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Enable validation against observed damage data (requires validation config or defaults)",
+    )
     args = parser.parse_args()
 
     # Load config file and merge CLI overrides
@@ -911,7 +930,15 @@ def main():
     # CLI im-type overrides config — re-validate after mutation
     if args.im_type:
         cfg.im_type = args.im_type
-        validate_config(cfg)
+
+    # CLI --validate enables validation
+    if args.validate:
+        cfg.validation_enabled = True
+        if not cfg.validation_data:
+            # Default validation data path
+            cfg.validation_data = "data/validation/northridge_validation_full.csv"
+
+    validate_config(cfg)
 
     # CLI nbi-filter merges into bridge_selection
     if args.nbi_filter:

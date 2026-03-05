@@ -43,9 +43,20 @@ im_source: shakemap
 
 # ── 3b. GMPE Model (for im_source: gmpe) ──────────────────
 # Which GMPE to use for ground motion prediction.
-#   ba08   : Boore & Atkinson (2008) — NGA-West1, Sa(1.0s) + PGA only
-#   bssa21 : Boore, Stewart, Seyhan & Atkinson (2014/2021) — NGA-West2,
-#            full spectral range (PGA, 0.01-10s), recommended
+#
+# Full models (official coefficients, production-ready):
+#   bssa21           : Boore, Stewart, Seyhan & Atkinson (2014/2021)
+#                      NGA-West2, PGA + 107 spectral periods, recommended
+#
+# Simplified models (representative coefficients, PGA only, for comparison):
+#   ask14            : Abrahamson, Silva & Kamai (2014)
+#   bssa14_simplified: Boore, Stewart, Seyhan & Atkinson (2014) simplified
+#   cb14             : Campbell & Bozorgnia (2014)
+#   cy14             : Chiou & Youngs (2014)
+#   idriss14         : Idriss (2014)
+#   gk15             : Graizer & Kalkan (2015)
+#   nga_east         : Generic NGA-East composite
+#
 # gmpe_model: bssa21
 
 # ── 4. Intensity Measure ─────────────────────────────────────
@@ -105,3 +116,10 @@ analysis:
   n_realizations: 50
   n_events: 50
   seed: 42
+
+# ── 10. Validation ──────────────────────────────────────────────
+# Compare pipeline predictions against observed damage data.
+# validation:
+#   enabled: true
+#   data: data/validation/northridge_validation_full.csv
+#   im_source: gmpe          # gmpe or shakemap

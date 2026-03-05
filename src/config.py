@@ -60,6 +60,11 @@ class AnalysisConfig:
     n_events: int = 50
     seed: int = 42
 
+    # Validation settings
+    validation_enabled: bool = False
+    validation_data: Optional[str] = None       # path to validation CSV
+    validation_im_source: str = "gmpe"          # "gmpe" or "shakemap"
+
     @property
     def im_column(self) -> str:
         """ShakeMap column name for the selected IM type."""
@@ -186,6 +191,15 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
         cfg.n_events = analysis.get("n_events", 50)
         cfg.seed = analysis.get("seed", 42)
 
+    # Validation settings
+    val = raw.get("validation", {})
+    if isinstance(val, dict):
+        cfg.validation_enabled = bool(val.get("enabled", False))
+        cfg.validation_data = val.get("data", None)
+        im_src = str(val.get("im_source", "gmpe")).lower()
+        if im_src in ("gmpe", "shakemap"):
+            cfg.validation_im_source = im_src
+
     validate_config(cfg)
 
     return cfg
@@ -220,6 +234,7 @@ def validate_config(cfg: AnalysisConfig) -> None:
         # Validate gmpe_model is registered (lazy import to avoid circular deps)
         try:
             import src.gmpe_bssa21  # noqa: F401 — registers BSSA21
+            import src.gmpe_nga_simplified  # noqa: F401 — registers 7 simplified models
             from src.gmpe_base import GMPE_REGISTRY
             if cfg.gmpe_model not in GMPE_REGISTRY:
                 raise ValueError(
@@ -231,6 +246,28 @@ def validate_config(cfg: AnalysisConfig) -> None:
                 pass  # numpy not available; skip registry check
             else:
                 raise
+
+    # Validation-specific checks
+    if cfg.validation_enabled:
+        if not cfg.validation_data:
+            raise ValueError(
+                "Configuration error: validation.enabled=true but no "
+                "validation.data path specified."
+            )
+        # Resolve relative paths from project root
+        data_path = Path(cfg.validation_data)
+        if not data_path.is_absolute():
+            data_path = Path(__file__).parent.parent / data_path
+        if not data_path.exists():
+            raise ValueError(
+                f"Configuration error: validation data file not found: "
+                f"'{data_path}'"
+            )
+        if cfg.validation_im_source not in ("gmpe", "shakemap"):
+            raise ValueError(
+                f"Configuration error: validation.im_source must be "
+                f"'gmpe' or 'shakemap', got '{cfg.validation_im_source}'"
+            )
 
 
 def print_config_summary(cfg: AnalysisConfig) -> None:
@@ -290,5 +327,11 @@ def print_config_summary(cfg: AnalysisConfig) -> None:
 
     print(f"  Realizations: {cfg.n_realizations}, Events: {cfg.n_events}, "
           f"Seed: {cfg.seed}")
+
+    if cfg.validation_enabled:
+        print(f"  Validation: ENABLED")
+        print(f"    Data: {cfg.validation_data}")
+        print(f"    IM Source: {cfg.validation_im_source}")
+
     print("=" * 60)
     print()
