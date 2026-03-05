@@ -469,7 +469,12 @@ def classify_nbi_to_hazus(
 
     def _row_to_hwb(row):
         # Determine material category
-        mat_code = str(row.get("material_code", "0")).strip()
+        raw_code = row.get("material_code", "0")
+        # Handle float codes (e.g. 1.0 → "1") from curated CSV
+        try:
+            mat_code = str(int(float(raw_code)))
+        except (ValueError, TypeError):
+            mat_code = str(raw_code).strip()
         if mat_code in ("1", "2", "5", "6"):
             material = "concrete"
         elif mat_code in ("3", "4"):
@@ -483,7 +488,7 @@ def classify_nbi_to_hazus(
             n_spans = 1
         n_spans = int(n_spans)
 
-        continuity = mat_code in ("2", "4", "6")  # continuous types
+        continuity = mat_code in ("2", "4", "6")  # continuous material codes
 
         if n_spans <= 1:
             span_type = "single"
@@ -504,7 +509,11 @@ def classify_nbi_to_hazus(
             length = 30
 
         # Subtype from design code
-        design_code = str(row.get("design_code", "00")).strip()
+        raw_dc = row.get("design_code", "00")
+        try:
+            design_code = str(int(float(raw_dc))).zfill(2)
+        except (ValueError, TypeError):
+            design_code = str(raw_dc).strip()
         subtype = ""
         if design_code in ("05", "06"):
             subtype = "box_girder"

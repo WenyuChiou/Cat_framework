@@ -14,6 +14,7 @@ data/plots/
 data/grid.xml
 data/stationlist.json
 data/CA24.txt
+data/nbi/CA*.txt
 data/nbi/raw/
 data/nbi/clean/
 data/nbi/curated/
@@ -23,6 +24,9 @@ data/nbi/meta/*.json
 data/hazard/usgs/shakemap/raw/
 data/hazard/usgs/shakemap/logs/
 data/hazard/usgs/shakemap/meta/
+
+# Validation results (re-created by running validation)
+data/validation/validation_results_*.csv
 
 # Windows
 desktop.ini
