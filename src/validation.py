@@ -35,6 +35,7 @@ def run_validation(
     bridges_df: pd.DataFrame,
     config,
     validation_csv_path: str,
+    shakemap: Optional[pd.DataFrame] = None,
 ) -> dict:
     """
     Compare pipeline predictions vs observed damage data.
@@ -42,12 +43,14 @@ def run_validation(
     Parameters
     ----------
     bridges_df : pd.DataFrame
-        Pipeline output with columns: structure_number, hwb_class,
-        latitude, longitude, im_selected, P_none..P_complete.
+        Pipeline output (used only if validation bridges match by structure_number).
     config : AnalysisConfig
         Analysis configuration.
     validation_csv_path : str
         Path to observed damage CSV file.
+    shakemap : pd.DataFrame, optional
+        ShakeMap grid data. Required for validation_im_source="shakemap" when
+        validation bridges are not in the pipeline results.
 
     Returns
     -------
@@ -72,8 +75,16 @@ def run_validation(
     if im_source == "gmpe":
         results = _validate_with_gmpe(confirmed, config)
     else:
-        # Use pipeline's im_selected (shakemap-based)
+        # shakemap mode: try pipeline merge first, fall back to direct interpolation
         results = _validate_with_pipeline(confirmed, bridges_df)
+        if len(results) == 0 and shakemap is not None:
+            print("[Validation] No pipeline matches. "
+                  "Interpolating ShakeMap IM directly for validation bridges...")
+            results = _validate_with_shakemap(confirmed, shakemap, config)
+        elif len(results) == 0 and shakemap is None:
+            print("[Validation] WARNING: No pipeline matches and no ShakeMap grid "
+                  "available. Falling back to GMPE mode.")
+            results = _validate_with_gmpe(confirmed, config)
 
     if len(results) == 0:
         print("[Validation] No matching bridges for validation.")
@@ -217,6 +228,74 @@ def _validate_with_pipeline(
             "correct": pred_ds == obs_ds,
             "error": pred_idx - obs_idx,
         })
+
+    return results
+
+
+def _validate_with_shakemap(
+    confirmed: pd.DataFrame, shakemap: pd.DataFrame, config,
+) -> list[dict]:
+    """Validate by interpolating ShakeMap IM directly for validation bridges."""
+    from src.interpolation import interpolate_im
+    from src.config import IM_COLUMN_MAP
+
+    im_type = getattr(config, "im_type", "SA10")
+    sm_col = IM_COLUMN_MAP.get(im_type, "PSA10")
+    if sm_col not in shakemap.columns:
+        print(f"[Validation] WARNING: ShakeMap missing column '{sm_col}' for {im_type}.")
+        return []
+
+    interp_method = getattr(config, "interpolation_method", "nearest")
+    interp_params = getattr(config, "interpolation_params", {})
+
+    bridge_lats = confirmed["latitude"].values
+    bridge_lons = confirmed["longitude"].values
+    grid_lats = shakemap["LAT"].values
+    grid_lons = shakemap["LON"].values
+    grid_vals = shakemap[sm_col].values
+
+    im_values = interpolate_im(
+        grid_lats, grid_lons, grid_vals,
+        bridge_lats, bridge_lons,
+        method=interp_method, **interp_params,
+    )
+
+    results = []
+    for i, (_, row) in enumerate(confirmed.iterrows()):
+        hwb = row["hwb_class"]
+        sa_val = float(im_values[i])
+
+        probs = damage_state_probabilities(sa_val, hwb)
+        pred_ds = max(DS_ORDER, key=lambda ds: probs[ds])
+        pred_idx = DS_INDEX[pred_ds]
+        expected_idx = sum(DS_INDEX[ds] * probs[ds] for ds in DS_ORDER)
+
+        obs_ds = row["observed_damage_state"]
+        obs_idx = DS_INDEX.get(obs_ds, -1)
+        if obs_idx < 0:
+            continue
+
+        results.append({
+            "structure_number": row["structure_number"],
+            "hwb_class": hwb,
+            "im_shakemap": round(sa_val, 4),
+            "observed": obs_ds,
+            "observed_idx": obs_idx,
+            "predicted": pred_ds,
+            "predicted_idx": pred_idx,
+            "expected_idx": round(expected_idx, 2),
+            "p_none": round(probs["none"], 3),
+            "p_slight": round(probs["slight"], 3),
+            "p_moderate": round(probs["moderate"], 3),
+            "p_extensive": round(probs["extensive"], 3),
+            "p_complete": round(probs["complete"], 3),
+            "correct": pred_ds == obs_ds,
+            "error": pred_idx - obs_idx,
+        })
+
+    print(f"[Validation] ShakeMap interpolation: {len(results)} bridges processed, "
+          f"IM range: {min(r['im_shakemap'] for r in results):.4f}g – "
+          f"{max(r['im_shakemap'] for r in results):.4f}g")
 
     return results
 

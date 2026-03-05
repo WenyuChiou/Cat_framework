@@ -282,7 +282,7 @@ def run_data_analysis(
             if config.validation_enabled and config.validation_data:
                 print("\n[Validation] Running validation against observed data...")
                 from src.validation import run_validation, plot_validation_results
-                val_metrics = run_validation(nbi, config, config.validation_data)
+                val_metrics = run_validation(nbi, config, config.validation_data, shakemap=sm)
                 plot_validation_results(val_metrics, OUTPUT_ANALYSIS)
 
                 # Save per-bridge validation results
