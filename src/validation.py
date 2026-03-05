@@ -19,6 +19,137 @@ from src.fragility import damage_state_probabilities
 DS_ORDER = ["none", "slight", "moderate", "extensive", "complete"]
 DS_INDEX = {ds: i for i, ds in enumerate(DS_ORDER)}
 
+# Minimum required columns for validation input
+REQUIRED_COLS = ["structure_number", "observed_damage_state"]
+# Columns that can be auto-enriched from NBI
+ENRICHABLE_COLS = ["latitude", "longitude", "hwb_class", "year_built", "material"]
+
+
+def create_validation_template(output_path: str, n_examples: int = 3) -> str:
+    """
+    Generate a template CSV for users to fill in observed damage data.
+
+    Parameters
+    ----------
+    output_path : str
+        Where to save the template CSV.
+    n_examples : int
+        Number of example rows to include.
+
+    Returns
+    -------
+    str : path to created file
+    """
+    rows = [
+        {"structure_number": "53-2795", "observed_damage_state": "complete",
+         "damage_description": "Column shear failure", "data_source": "field_inspection"},
+        {"structure_number": "53-0566", "observed_damage_state": "slight",
+         "damage_description": "Minor spalling", "data_source": "field_inspection"},
+        {"structure_number": "YOUR_BRIDGE_ID", "observed_damage_state": "none",
+         "damage_description": "", "data_source": ""},
+    ][:n_examples]
+
+    df = pd.DataFrame(rows)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    df.to_csv(output_path, index=False, encoding="utf-8")
+    print(f"[Validation] Template saved: {output_path}")
+    print(f"[Validation] Required columns: {REQUIRED_COLS}")
+    print(f"[Validation] Valid damage states: {DS_ORDER}")
+    print(f"[Validation] Optional columns (auto-enriched from NBI if missing): {ENRICHABLE_COLS}")
+    return output_path
+
+
+def load_validation_data(
+    csv_path: str,
+    nbi_df: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """
+    Load and normalize validation data from user-provided CSV.
+
+    Flexible loader that handles multiple input formats:
+    - Minimal: structure_number + observed_damage_state
+    - Full: all columns including lat/lon, hwb_class, damage_confirmed
+
+    Missing columns are auto-enriched from NBI if provided.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to validation CSV.
+    nbi_df : pd.DataFrame, optional
+        NBI bridge data for enriching missing columns.
+
+    Returns
+    -------
+    pd.DataFrame with standardized columns, filtered to confirmed observations.
+    """
+    df = pd.read_csv(csv_path, encoding="utf-8")
+
+    # Validate required columns
+    missing_req = [c for c in REQUIRED_COLS if c not in df.columns]
+    if missing_req:
+        raise ValueError(
+            f"Validation CSV missing required columns: {missing_req}. "
+            f"Required: {REQUIRED_COLS}. "
+            f"Use create_validation_template() to generate a template."
+        )
+
+    # Normalize damage state strings
+    df["observed_damage_state"] = df["observed_damage_state"].str.strip().str.lower()
+    invalid_ds = df[~df["observed_damage_state"].isin(DS_ORDER + ["unknown"])]
+    if len(invalid_ds) > 0:
+        bad_vals = invalid_ds["observed_damage_state"].unique().tolist()
+        print(f"[Validation] WARNING: Unrecognized damage states {bad_vals} "
+              f"will be excluded. Valid: {DS_ORDER}")
+
+    # Add damage_confirmed if missing (assume all rows are confirmed)
+    if "damage_confirmed" not in df.columns:
+        df["damage_confirmed"] = True
+        print(f"[Validation] No 'damage_confirmed' column — treating all "
+              f"{len(df)} rows as confirmed observations.")
+
+    # Enrich from NBI if available
+    if nbi_df is not None and len(nbi_df) > 0:
+        missing_enrichable = [c for c in ENRICHABLE_COLS if c not in df.columns]
+        if missing_enrichable:
+            # Columns available in NBI for enrichment
+            nbi_available = [c for c in missing_enrichable if c in nbi_df.columns]
+            if nbi_available:
+                enrich_cols = ["structure_number"] + nbi_available
+                enriched = df.merge(
+                    nbi_df[enrich_cols].drop_duplicates("structure_number"),
+                    on="structure_number",
+                    how="left",
+                )
+                n_matched = enriched[nbi_available[0]].notna().sum()
+                for col in nbi_available:
+                    df[col] = enriched[col]
+                print(f"[Validation] Enriched {n_matched}/{len(df)} bridges "
+                      f"with {nbi_available} from NBI.")
+
+        # Also enrich rows that have NBI columns but with NaN values
+        has_but_nan = [c for c in ENRICHABLE_COLS
+                       if c in df.columns and c in nbi_df.columns and df[c].isna().any()]
+        if has_but_nan:
+            for col in has_but_nan:
+                nbi_lookup = nbi_df.set_index("structure_number")[col]
+                mask = df[col].isna()
+                df.loc[mask, col] = df.loc[mask, "structure_number"].map(nbi_lookup)
+            filled = sum(1 for c in has_but_nan if df[c].notna().sum() > 0)
+            if filled > 0:
+                print(f"[Validation] Filled NaN values in {has_but_nan} from NBI.")
+
+    # Check for essential columns needed for validation
+    if "hwb_class" not in df.columns:
+        print("[Validation] WARNING: No 'hwb_class' column and could not enrich from NBI. "
+              "Validation requires HWB class for fragility computation.")
+
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        print("[Validation] WARNING: No lat/lon columns. GMPE-based validation "
+              "requires bridge coordinates.")
+
+    return df
+
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Haversine distance in km between two lat/lon points."""
@@ -56,8 +187,8 @@ def run_validation(
     -------
     dict with keys: accuracy, mae, bias, confusion_matrix, per_bridge (DataFrame)
     """
-    # Load observed data
-    val_df = pd.read_csv(validation_csv_path, encoding="utf-8")
+    # Load and normalize observed data (enrich from pipeline NBI if available)
+    val_df = load_validation_data(validation_csv_path, nbi_df=bridges_df)
     confirmed = val_df[val_df["damage_confirmed"] == True].copy()  # noqa: E712
 
     if len(confirmed) == 0:

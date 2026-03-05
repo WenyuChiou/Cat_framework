@@ -921,7 +921,20 @@ def main():
         action="store_true",
         help="Enable validation against observed damage data (requires validation config or defaults)",
     )
+    parser.add_argument(
+        "--validation-template",
+        type=str,
+        metavar="PATH",
+        default=None,
+        help="Generate a validation CSV template at the given path, then exit",
+    )
     args = parser.parse_args()
+
+    # Handle --validation-template early exit
+    if args.validation_template:
+        from src.validation import create_validation_template
+        create_validation_template(args.validation_template)
+        return
 
     # Load config file and merge CLI overrides
     from src.config import load_config, validate_config
