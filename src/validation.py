@@ -400,6 +400,8 @@ def _validate_with_gmpe(confirmed: pd.DataFrame, config) -> list[dict]:
         results.append({
             "structure_number": row["structure_number"],
             "hwb_class": hwb,
+            "latitude": lat,
+            "longitude": lon,
             "r_jb_km": round(r_jb, 1),
             "im_gmpe": round(sa_gmpe, 4),
             "im_shakemap": round(row.get("sa1s_shakemap", 0.0), 4),
@@ -466,6 +468,8 @@ def _validate_with_pipeline(
         results.append({
             "structure_number": row["structure_number"],
             "hwb_class": hwb,
+            "latitude": row.get("latitude", np.nan),
+            "longitude": row.get("longitude", np.nan),
             "im_selected": round(float(row["im_selected"]), 4),
             "observed": obs_ds,
             "observed_idx": obs_idx,
@@ -532,6 +536,8 @@ def _validate_with_shakemap(
         results.append({
             "structure_number": row["structure_number"],
             "hwb_class": hwb,
+            "latitude": row.get("latitude", np.nan),
+            "longitude": row.get("longitude", np.nan),
             "im_shakemap": round(sa_val, 4),
             "observed": obs_ds,
             "observed_idx": obs_idx,
@@ -601,73 +607,341 @@ def compute_validation_metrics(predicted: pd.Series, observed: pd.Series) -> dic
 
 def plot_validation_results(metrics: dict, output_dir: str) -> list[str]:
     """
-    Generate validation plots: confusion matrix heatmap and residual histogram.
+    Generate comprehensive validation plots.
+
+    Produces:
+    1. Confusion matrix heatmap
+    2. Residual histogram
+    3. Spatial residual map
+    4. Observed vs predicted damage by IM bin (fragility validation)
+    5. Per-class accuracy breakdown
+    6. Residual vs distance from epicenter
 
     Returns list of saved file paths.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
 
     os.makedirs(output_dir, exist_ok=True)
     saved = []
+    per_bridge = metrics.get("per_bridge")
+    if per_bridge is None or len(per_bridge) == 0:
+        return saved
 
-    # 1. Confusion matrix heatmap
+    # ── 1. Confusion matrix heatmap ──
     cm = metrics.get("confusion_matrix", {})
     if cm:
-        fig, ax = plt.subplots(figsize=(7, 6))
-        labels = DS_ORDER
-        matrix = np.array([[cm.get(obs, {}).get(pred, 0)
-                            for pred in labels] for obs in labels])
-
-        im = ax.imshow(matrix, cmap="Blues", aspect="auto")
-        ax.set_xticks(range(len(labels)))
-        ax.set_xticklabels(labels, rotation=45, ha="right")
-        ax.set_yticks(range(len(labels)))
-        ax.set_yticklabels(labels)
-        ax.set_xlabel("Predicted")
-        ax.set_ylabel("Observed")
-        ax.set_title(
-            f"Confusion Matrix  (Accuracy: {metrics['accuracy']:.1%}, "
-            f"MAE: {metrics['mae']:.2f})"
-        )
-
-        # Annotate cells
-        for i in range(len(labels)):
-            for j in range(len(labels)):
-                val = matrix[i, j]
-                if val > 0:
-                    color = "white" if val > matrix.max() / 2 else "black"
-                    ax.text(j, i, str(val), ha="center", va="center", color=color)
-
-        fig.colorbar(im, ax=ax, shrink=0.8, label="Count")
-        fig.tight_layout()
-        path = os.path.join(output_dir, "validation_confusion_matrix.png")
-        fig.savefig(path, dpi=150)
-        plt.close(fig)
+        path = _plot_confusion_matrix(cm, metrics, output_dir, plt)
         saved.append(path)
-        print(f"  Saved: {path}")
 
-    # 2. Residual histogram
-    per_bridge = metrics.get("per_bridge")
-    if per_bridge is not None and len(per_bridge) > 0 and "error" in per_bridge.columns:
-        fig, ax = plt.subplots(figsize=(7, 5))
-        errors = per_bridge["error"]
-        bins = range(int(errors.min()) - 1, int(errors.max()) + 2)
-        ax.hist(errors, bins=bins, edgecolor="black", alpha=0.7, color="steelblue")
-        ax.axvline(0, color="red", linestyle="--", linewidth=1.5, label="Perfect")
-        ax.set_xlabel("Prediction Error (predicted - observed DS index)")
-        ax.set_ylabel("Count")
-        ax.set_title(f"Prediction Residuals  (Bias: {metrics['bias']:+.2f})")
-        ax.legend()
-        fig.tight_layout()
-        path = os.path.join(output_dir, "validation_residuals.png")
-        fig.savefig(path, dpi=150)
-        plt.close(fig)
+    # ── 2. Residual histogram ──
+    if "error" in per_bridge.columns:
+        path = _plot_residual_histogram(per_bridge, metrics, output_dir, plt)
         saved.append(path)
-        print(f"  Saved: {path}")
+
+    # ── 3. Spatial residual map ──
+    if "latitude" in per_bridge.columns and "longitude" in per_bridge.columns:
+        has_coords = per_bridge["latitude"].notna() & per_bridge["longitude"].notna()
+        if has_coords.sum() >= 3:
+            path = _plot_spatial_residual_map(per_bridge[has_coords], output_dir, plt, TwoSlopeNorm)
+            saved.append(path)
+
+    # ── 4. Observed vs predicted damage ratio by IM bin ──
+    im_col = None
+    for c in ["im_gmpe", "im_shakemap", "im_selected"]:
+        if c in per_bridge.columns:
+            im_col = c
+            break
+    if im_col:
+        path = _plot_damage_ratio_by_im(per_bridge, im_col, output_dir, plt)
+        saved.append(path)
+
+    # ── 5. Per-class accuracy ──
+    if "hwb_class" in per_bridge.columns:
+        path = _plot_per_class_accuracy(per_bridge, output_dir, plt)
+        saved.append(path)
+
+    # ── 6. Residual vs distance ──
+    if "r_jb_km" in per_bridge.columns:
+        path = _plot_residual_vs_distance(per_bridge, output_dir, plt)
+        saved.append(path)
 
     return saved
+
+
+def _plot_confusion_matrix(cm, metrics, output_dir, plt):
+    """Confusion matrix heatmap."""
+    fig, ax = plt.subplots(figsize=(7, 6))
+    labels = DS_ORDER
+    matrix = np.array([[cm.get(obs, {}).get(pred, 0)
+                        for pred in labels] for obs in labels])
+
+    im = ax.imshow(matrix, cmap="Blues", aspect="auto")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Observed")
+    ax.set_title(
+        f"Confusion Matrix  (Accuracy: {metrics['accuracy']:.1%}, "
+        f"MAE: {metrics['mae']:.2f})"
+    )
+    for i in range(len(labels)):
+        for j in range(len(labels)):
+            val = matrix[i, j]
+            if val > 0:
+                color = "white" if val > matrix.max() / 2 else "black"
+                ax.text(j, i, str(val), ha="center", va="center", color=color)
+    fig.colorbar(im, ax=ax, shrink=0.8, label="Count")
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_01_confusion_matrix.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {path}")
+    return path
+
+
+def _plot_residual_histogram(per_bridge, metrics, output_dir, plt):
+    """Residual histogram with normal overlay."""
+    fig, ax = plt.subplots(figsize=(7, 5))
+    errors = per_bridge["error"]
+    bins = range(int(errors.min()) - 1, int(errors.max()) + 2)
+    ax.hist(errors, bins=bins, edgecolor="black", alpha=0.7, color="steelblue")
+    ax.axvline(0, color="red", linestyle="--", linewidth=1.5, label="Perfect prediction")
+    ax.axvline(errors.mean(), color="orange", linestyle="-", linewidth=1.5,
+               label=f"Mean bias: {errors.mean():+.2f}")
+    ax.set_xlabel("Prediction Error (predicted - observed DS index)")
+    ax.set_ylabel("Count")
+    ax.set_title(f"Prediction Residuals  (N={len(errors)}, Bias: {metrics['bias']:+.2f})")
+    ax.legend()
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_02_residuals.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {path}")
+    return path
+
+
+def _plot_spatial_residual_map(df, output_dir, plt, TwoSlopeNorm):
+    """Spatial map of prediction errors — shows where model over/under-predicts."""
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    errors = df["error"].values
+    lats = df["latitude"].values
+    lons = df["longitude"].values
+
+    # Left: Spatial residual (error) map
+    ax = axes[0]
+    vmax = max(abs(errors.min()), abs(errors.max()), 1)
+    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+    sc = ax.scatter(lons, lats, c=errors, cmap="RdBu_r", norm=norm,
+                    s=40, edgecolors="black", linewidths=0.3, alpha=0.8)
+    fig.colorbar(sc, ax=ax, shrink=0.8, label="Error (pred - obs DS index)")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title("Spatial Prediction Error\n(red=over-predict, blue=under-predict)")
+    ax.set_aspect("equal")
+
+    # Right: Observed vs predicted side-by-side
+    ax = axes[1]
+    obs_idx = df["observed_idx"].values
+    pred_idx = df["predicted_idx"].values
+    sc = ax.scatter(obs_idx + np.random.uniform(-0.15, 0.15, len(obs_idx)),
+                    pred_idx + np.random.uniform(-0.15, 0.15, len(pred_idx)),
+                    c=errors, cmap="RdBu_r", norm=norm,
+                    s=40, edgecolors="black", linewidths=0.3, alpha=0.7)
+    # 1:1 line
+    ax.plot([-0.5, 4.5], [-0.5, 4.5], "k--", linewidth=1, label="Perfect")
+    ax.set_xticks(range(5))
+    ax.set_xticklabels(DS_ORDER, rotation=45, ha="right")
+    ax.set_yticks(range(5))
+    ax.set_yticklabels(DS_ORDER)
+    ax.set_xlabel("Observed Damage State")
+    ax.set_ylabel("Predicted Damage State")
+    ax.set_title("Observed vs Predicted\n(jittered for visibility)")
+    ax.legend(loc="upper left")
+    ax.set_aspect("equal")
+
+    fig.suptitle(f"Validation Spatial Analysis (N={len(df)})", fontsize=14, y=1.01)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_03_spatial_residual.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+    return path
+
+
+def _plot_damage_ratio_by_im(per_bridge, im_col, output_dir, plt):
+    """Observed vs predicted damage distribution by IM bin — fragility validation."""
+    df = per_bridge.copy()
+    im_vals = df[im_col]
+
+    # Create IM bins
+    bin_edges = [0, 0.1, 0.2, 0.3, 0.5, 0.8, 1.2, float("inf")]
+    bin_labels = ["<0.1", "0.1-0.2", "0.2-0.3", "0.3-0.5", "0.5-0.8", "0.8-1.2", ">1.2"]
+    df["im_bin"] = pd.cut(im_vals, bins=bin_edges, labels=bin_labels, right=False)
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    ds_colors = {
+        "none": "#2ecc71", "slight": "#f1c40f", "moderate": "#e67e22",
+        "extensive": "#e74c3c", "complete": "#8e44ad",
+    }
+
+    for ax_idx, (col_name, title) in enumerate([
+        ("observed", "Observed Damage"),
+        ("predicted", "Predicted Damage"),
+    ]):
+        ax = axes[ax_idx]
+        # Count per bin per DS
+        bin_groups = df.groupby("im_bin", observed=True)
+        bin_counts = []
+        for b in bin_labels:
+            grp = df[df["im_bin"] == b]
+            if len(grp) == 0:
+                bin_counts.append({ds: 0 for ds in DS_ORDER})
+                continue
+            counts = grp[col_name].value_counts(normalize=True)
+            bin_counts.append({ds: counts.get(ds, 0) for ds in DS_ORDER})
+
+        # Stacked bar
+        bottoms = np.zeros(len(bin_labels))
+        for ds in DS_ORDER:
+            vals = [bc[ds] for bc in bin_counts]
+            ax.bar(bin_labels, vals, bottom=bottoms, label=ds.capitalize(),
+                   color=ds_colors[ds], edgecolor="white", linewidth=0.5)
+            bottoms += vals
+
+        ax.set_xlabel(f"IM ({im_col}) bin (g)")
+        ax.set_ylabel("Proportion")
+        ax.set_title(title)
+        ax.legend(loc="upper left", fontsize=8)
+        ax.set_ylim(0, 1.05)
+
+        # Add sample count labels
+        for i, b in enumerate(bin_labels):
+            n = len(df[df["im_bin"] == b])
+            if n > 0:
+                ax.text(i, 1.01, f"n={n}", ha="center", va="bottom", fontsize=7)
+
+    fig.suptitle("Damage Distribution by IM Level — Observed vs Predicted", fontsize=13)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_04_damage_by_im.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+    return path
+
+
+def _plot_per_class_accuracy(per_bridge, output_dir, plt):
+    """Per-HWB-class accuracy bar chart."""
+    df = per_bridge.copy()
+    class_stats = df.groupby("hwb_class").agg(
+        n=("correct", "size"),
+        accuracy=("correct", "mean"),
+        mae=("error", lambda x: x.abs().mean()),
+        bias=("error", "mean"),
+    ).sort_values("n", ascending=False)
+
+    # Only show classes with >= 2 bridges
+    class_stats = class_stats[class_stats["n"] >= 2]
+    if len(class_stats) == 0:
+        return None
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Left: Accuracy + sample size
+    ax = axes[0]
+    colors = ["#2ecc71" if a >= 0.5 else "#e74c3c" for a in class_stats["accuracy"]]
+    bars = ax.barh(range(len(class_stats)), class_stats["accuracy"],
+                   color=colors, edgecolor="black", linewidth=0.5)
+    ax.set_yticks(range(len(class_stats)))
+    ax.set_yticklabels(class_stats.index)
+    ax.set_xlabel("Accuracy")
+    ax.set_title("Exact Match Accuracy by HWB Class")
+    ax.axvline(0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_xlim(0, 1.0)
+    for i, (_, row) in enumerate(class_stats.iterrows()):
+        ax.text(row["accuracy"] + 0.02, i, f"n={int(row['n'])}", va="center", fontsize=8)
+
+    # Right: Bias per class
+    ax = axes[1]
+    colors = ["#e74c3c" if b > 0 else "#3498db" for b in class_stats["bias"]]
+    ax.barh(range(len(class_stats)), class_stats["bias"],
+            color=colors, edgecolor="black", linewidth=0.5)
+    ax.set_yticks(range(len(class_stats)))
+    ax.set_yticklabels(class_stats.index)
+    ax.set_xlabel("Mean Bias (positive = over-predicts)")
+    ax.set_title("Prediction Bias by HWB Class")
+    ax.axvline(0, color="black", linewidth=1)
+
+    fig.suptitle("Per-Class Validation Performance", fontsize=13)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_05_per_class_accuracy.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+    return path
+
+
+def _plot_residual_vs_distance(per_bridge, output_dir, plt):
+    """Residual vs Rjb distance — tests GMPE attenuation correctness."""
+    df = per_bridge[per_bridge["r_jb_km"].notna()].copy()
+    if len(df) < 3:
+        return None
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: Error vs distance
+    ax = axes[0]
+    ax.scatter(df["r_jb_km"], df["error"], alpha=0.5, s=30, c="steelblue", edgecolors="black", linewidths=0.3)
+    ax.axhline(0, color="red", linestyle="--", linewidth=1)
+
+    # Running mean trend
+    df_sorted = df.sort_values("r_jb_km")
+    if len(df_sorted) >= 10:
+        window = max(5, len(df_sorted) // 8)
+        rolling_mean = df_sorted["error"].rolling(window, center=True).mean()
+        ax.plot(df_sorted["r_jb_km"], rolling_mean, color="orange", linewidth=2,
+                label=f"Rolling mean (w={window})")
+        ax.legend()
+
+    ax.set_xlabel("Distance R_JB (km)")
+    ax.set_ylabel("Prediction Error (pred - obs DS index)")
+    ax.set_title("Prediction Error vs Distance")
+
+    # Right: IM vs distance (attenuation check)
+    ax = axes[1]
+    im_col = None
+    for c in ["im_gmpe", "im_shakemap", "im_selected"]:
+        if c in df.columns:
+            im_col = c
+            break
+    if im_col:
+        correct = df[df["correct"] == True]
+        wrong = df[df["correct"] == False]
+        if len(wrong) > 0:
+            ax.scatter(wrong["r_jb_km"], wrong[im_col], alpha=0.5, s=30,
+                       c="red", marker="x", label=f"Incorrect (n={len(wrong)})")
+        if len(correct) > 0:
+            ax.scatter(correct["r_jb_km"], correct[im_col], alpha=0.5, s=30,
+                       c="green", marker="o", edgecolors="black", linewidths=0.3,
+                       label=f"Correct (n={len(correct)})")
+        ax.set_xlabel("Distance R_JB (km)")
+        ax.set_ylabel(f"IM ({im_col}) (g)")
+        ax.set_title("IM Attenuation with Prediction Accuracy")
+        ax.legend()
+
+    fig.suptitle("Distance-Dependent Validation", fontsize=13)
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_06_residual_vs_distance.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+    return path
 
 
 def _print_validation_summary(rdf: pd.DataFrame, metrics: dict, config) -> None:
