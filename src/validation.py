@@ -19,15 +19,21 @@ from src.fragility import damage_state_probabilities
 DS_ORDER = ["none", "slight", "moderate", "extensive", "complete"]
 DS_INDEX = {ds: i for i, ds in enumerate(DS_ORDER)}
 
-# Minimum required columns for validation input
-REQUIRED_COLS = ["structure_number", "observed_damage_state"]
-# Columns that can be auto-enriched from NBI
+# Only observed_damage_state is truly required.
+# Bridge identification: structure_number OR (latitude + longitude)
 ENRICHABLE_COLS = ["latitude", "longitude", "hwb_class", "year_built", "material"]
 
+# Spatial match threshold (km) for nearest-NBI lookup
+SPATIAL_MATCH_THRESHOLD_KM = 0.5
 
-def create_validation_template(output_path: str, n_examples: int = 3) -> str:
+
+def create_validation_template(output_path: str, n_examples: int = 5) -> str:
     """
     Generate a template CSV for users to fill in observed damage data.
+
+    Two identification modes are supported:
+    - By structure_number: auto-enriches lat/lon/hwb from NBI
+    - By lat/lon: finds nearest NBI bridge within threshold
 
     Parameters
     ----------
@@ -41,11 +47,20 @@ def create_validation_template(output_path: str, n_examples: int = 3) -> str:
     str : path to created file
     """
     rows = [
-        {"structure_number": "53-2795", "observed_damage_state": "complete",
+        {"structure_number": "53-2795", "latitude": "", "longitude": "",
+         "observed_damage_state": "complete", "hwb_class": "",
          "damage_description": "Column shear failure", "data_source": "field_inspection"},
-        {"structure_number": "53-0566", "observed_damage_state": "slight",
+        {"structure_number": "53-0566", "latitude": "", "longitude": "",
+         "observed_damage_state": "slight", "hwb_class": "",
          "damage_description": "Minor spalling", "data_source": "field_inspection"},
-        {"structure_number": "YOUR_BRIDGE_ID", "observed_damage_state": "none",
+        {"structure_number": "", "latitude": "34.328", "longitude": "-118.396",
+         "observed_damage_state": "complete", "hwb_class": "",
+         "damage_description": "Coordinate-only example", "data_source": "field_inspection"},
+        {"structure_number": "", "latitude": "34.2", "longitude": "-118.5",
+         "observed_damage_state": "moderate", "hwb_class": "HWB5",
+         "damage_description": "User-provided HWB class", "data_source": "field_inspection"},
+        {"structure_number": "YOUR_ID", "latitude": "", "longitude": "",
+         "observed_damage_state": "none", "hwb_class": "",
          "damage_description": "", "data_source": ""},
     ][:n_examples]
 
@@ -53,9 +68,11 @@ def create_validation_template(output_path: str, n_examples: int = 3) -> str:
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     df.to_csv(output_path, index=False, encoding="utf-8")
     print(f"[Validation] Template saved: {output_path}")
-    print(f"[Validation] Required columns: {REQUIRED_COLS}")
-    print(f"[Validation] Valid damage states: {DS_ORDER}")
-    print(f"[Validation] Optional columns (auto-enriched from NBI if missing): {ENRICHABLE_COLS}")
+    print(f"[Validation] Bridge identification (at least one):")
+    print(f"  - structure_number: matches NBI by ID")
+    print(f"  - latitude + longitude: matches nearest NBI bridge within {SPATIAL_MATCH_THRESHOLD_KM}km")
+    print(f"[Validation] Required: observed_damage_state ({DS_ORDER})")
+    print(f"[Validation] Optional: hwb_class (auto-enriched from NBI if missing)")
     return output_path
 
 
@@ -66,11 +83,10 @@ def load_validation_data(
     """
     Load and normalize validation data from user-provided CSV.
 
-    Flexible loader that handles multiple input formats:
-    - Minimal: structure_number + observed_damage_state
-    - Full: all columns including lat/lon, hwb_class, damage_confirmed
-
-    Missing columns are auto-enriched from NBI if provided.
+    Supports three identification modes (per row):
+    1. structure_number matches NBI → enrich from NBI
+    2. latitude + longitude → spatial match to nearest NBI bridge
+    3. latitude + longitude + hwb_class → no NBI needed
 
     Parameters
     ----------
@@ -81,17 +97,24 @@ def load_validation_data(
 
     Returns
     -------
-    pd.DataFrame with standardized columns, filtered to confirmed observations.
+    pd.DataFrame with standardized columns.
     """
     df = pd.read_csv(csv_path, encoding="utf-8")
 
-    # Validate required columns
-    missing_req = [c for c in REQUIRED_COLS if c not in df.columns]
-    if missing_req:
+    # Must have observed_damage_state
+    if "observed_damage_state" not in df.columns:
         raise ValueError(
-            f"Validation CSV missing required columns: {missing_req}. "
-            f"Required: {REQUIRED_COLS}. "
-            f"Use create_validation_template() to generate a template."
+            "Validation CSV missing 'observed_damage_state' column. "
+            "Use create_validation_template() to generate a template."
+        )
+
+    # Must have at least one identification method
+    has_id = "structure_number" in df.columns
+    has_coords = "latitude" in df.columns and "longitude" in df.columns
+    if not has_id and not has_coords:
+        raise ValueError(
+            "Validation CSV must have 'structure_number' and/or "
+            "'latitude'+'longitude' columns to identify bridges."
         )
 
     # Normalize damage state strings
@@ -108,47 +131,142 @@ def load_validation_data(
         print(f"[Validation] No 'damage_confirmed' column — treating all "
               f"{len(df)} rows as confirmed observations.")
 
-    # Enrich from NBI if available
-    if nbi_df is not None and len(nbi_df) > 0:
-        missing_enrichable = [c for c in ENRICHABLE_COLS if c not in df.columns]
-        if missing_enrichable:
-            # Columns available in NBI for enrichment
-            nbi_available = [c for c in missing_enrichable if c in nbi_df.columns]
-            if nbi_available:
-                enrich_cols = ["structure_number"] + nbi_available
-                enriched = df.merge(
-                    nbi_df[enrich_cols].drop_duplicates("structure_number"),
-                    on="structure_number",
-                    how="left",
-                )
-                n_matched = enriched[nbi_available[0]].notna().sum()
-                for col in nbi_available:
-                    df[col] = enriched[col]
-                print(f"[Validation] Enriched {n_matched}/{len(df)} bridges "
-                      f"with {nbi_available} from NBI.")
+    # Ensure enrichable columns exist (even if NaN)
+    # Use object dtype for string columns to avoid FutureWarning on mixed types
+    for col in ENRICHABLE_COLS:
+        if col not in df.columns:
+            if col in ("hwb_class", "material"):
+                df[col] = pd.Series([np.nan] * len(df), dtype="object")
+            else:
+                df[col] = np.nan
 
-        # Also enrich rows that have NBI columns but with NaN values
-        has_but_nan = [c for c in ENRICHABLE_COLS
-                       if c in df.columns and c in nbi_df.columns and df[c].isna().any()]
-        if has_but_nan:
-            for col in has_but_nan:
-                nbi_lookup = nbi_df.set_index("structure_number")[col]
-                mask = df[col].isna()
-                df.loc[mask, col] = df.loc[mask, "structure_number"].map(nbi_lookup)
-            filled = sum(1 for c in has_but_nan if df[c].notna().sum() > 0)
-            if filled > 0:
-                print(f"[Validation] Filled NaN values in {has_but_nan} from NBI.")
+    # Ensure structure_number column exists
+    if "structure_number" not in df.columns:
+        df["structure_number"] = ""
 
-    # Check for essential columns needed for validation
-    if "hwb_class" not in df.columns:
-        print("[Validation] WARNING: No 'hwb_class' column and could not enrich from NBI. "
-              "Validation requires HWB class for fragility computation.")
+    # Convert lat/lon to numeric (handles empty strings from template)
+    if has_coords:
+        df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+        df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
 
-    if "latitude" not in df.columns or "longitude" not in df.columns:
-        print("[Validation] WARNING: No lat/lon columns. GMPE-based validation "
-              "requires bridge coordinates.")
+    if nbi_df is None or len(nbi_df) == 0:
+        _check_completeness(df)
+        return df
 
+    # ── Enrichment Strategy ──
+    # Phase 1: structure_number match
+    n_enriched_by_id = _enrich_by_structure_number(df, nbi_df)
+
+    # Phase 2: spatial match for rows still missing hwb_class or lat/lon
+    n_enriched_by_spatial = _enrich_by_spatial_match(df, nbi_df)
+
+    total = n_enriched_by_id + n_enriched_by_spatial
+    if total > 0:
+        print(f"[Validation] Enrichment summary: "
+              f"{n_enriched_by_id} by ID, {n_enriched_by_spatial} by spatial match")
+
+    _check_completeness(df)
     return df
+
+
+def _enrich_by_structure_number(df: pd.DataFrame, nbi_df: pd.DataFrame) -> int:
+    """Enrich validation rows by matching structure_number to NBI. Returns count enriched."""
+    if "structure_number" not in nbi_df.columns:
+        return 0
+
+    # Rows that have a structure_number but are missing enrichable data
+    has_sn = df["structure_number"].notna() & (df["structure_number"] != "")
+    needs_enrich = has_sn & (df["hwb_class"].isna() | df["latitude"].isna())
+
+    if needs_enrich.sum() == 0:
+        return 0
+
+    nbi_cols = ["structure_number"] + [c for c in ENRICHABLE_COLS if c in nbi_df.columns]
+    nbi_lookup = nbi_df[nbi_cols].drop_duplicates("structure_number")
+
+    n_matched = 0
+    for idx in df.index[needs_enrich]:
+        sn = df.at[idx, "structure_number"]
+        nbi_row = nbi_lookup[nbi_lookup["structure_number"] == sn]
+        if len(nbi_row) == 0:
+            continue
+        nbi_row = nbi_row.iloc[0]
+        enriched = False
+        for col in ENRICHABLE_COLS:
+            if col in nbi_row.index and pd.isna(df.at[idx, col]):
+                df.at[idx, col] = nbi_row[col]
+                enriched = True
+        if enriched:
+            n_matched += 1
+
+    if n_matched > 0:
+        print(f"[Validation] Enriched {n_matched}/{needs_enrich.sum()} bridges by structure_number match.")
+
+    return n_matched
+
+
+def _enrich_by_spatial_match(df: pd.DataFrame, nbi_df: pd.DataFrame) -> int:
+    """Enrich validation rows by finding nearest NBI bridge within threshold. Returns count enriched."""
+    if "latitude" not in nbi_df.columns or "longitude" not in nbi_df.columns:
+        return 0
+
+    # Rows that have coordinates but still missing hwb_class
+    has_coords = df["latitude"].notna() & df["longitude"].notna()
+    needs_hwb = df["hwb_class"].isna() | (df["hwb_class"] == "")
+    spatial_candidates = has_coords & needs_hwb
+
+    if spatial_candidates.sum() == 0:
+        return 0
+
+    nbi_lats = nbi_df["latitude"].values
+    nbi_lons = nbi_df["longitude"].values
+
+    n_matched = 0
+    for idx in df.index[spatial_candidates]:
+        vlat = float(df.at[idx, "latitude"])
+        vlon = float(df.at[idx, "longitude"])
+
+        # Find nearest NBI bridge
+        dists = np.array([
+            haversine_km(vlat, vlon, nlat, nlon)
+            for nlat, nlon in zip(nbi_lats, nbi_lons)
+        ])
+        min_idx = int(np.argmin(dists))
+        min_dist = dists[min_idx]
+
+        if min_dist <= SPATIAL_MATCH_THRESHOLD_KM:
+            nbi_row = nbi_df.iloc[min_idx]
+            for col in ENRICHABLE_COLS:
+                if col in nbi_row.index and pd.isna(df.at[idx, col]):
+                    df.at[idx, col] = nbi_row[col]
+            # Also fill structure_number if missing
+            if pd.isna(df.at[idx, "structure_number"]) or df.at[idx, "structure_number"] == "":
+                df.at[idx, "structure_number"] = nbi_row["structure_number"]
+            n_matched += 1
+        else:
+            print(f"[Validation] Row {idx}: nearest NBI bridge is {min_dist:.1f}km away "
+                  f"(>{SPATIAL_MATCH_THRESHOLD_KM}km threshold). "
+                  f"No spatial match for ({vlat:.4f}, {vlon:.4f}).")
+
+    if n_matched > 0:
+        print(f"[Validation] Enriched {n_matched}/{spatial_candidates.sum()} bridges "
+              f"by spatial match (within {SPATIAL_MATCH_THRESHOLD_KM}km).")
+
+    return n_matched
+
+
+def _check_completeness(df: pd.DataFrame) -> None:
+    """Print warnings for rows that still lack essential data after enrichment."""
+    n_no_hwb = df["hwb_class"].isna().sum() + (df["hwb_class"] == "").sum()
+    n_no_coords = df["latitude"].isna().sum()
+    total = len(df)
+
+    if n_no_hwb > 0:
+        print(f"[Validation] WARNING: {n_no_hwb}/{total} bridges still missing hwb_class. "
+              f"These cannot be validated (no fragility curve).")
+    if n_no_coords > 0:
+        print(f"[Validation] WARNING: {n_no_coords}/{total} bridges missing coordinates. "
+              f"GMPE-based validation requires lat/lon.")
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -257,9 +375,12 @@ def _validate_with_gmpe(confirmed: pd.DataFrame, config) -> list[dict]:
 
     results = []
     for _, row in confirmed.iterrows():
-        lat = row["latitude"]
-        lon = row["longitude"]
-        hwb = row["hwb_class"]
+        lat = row.get("latitude")
+        lon = row.get("longitude")
+        hwb = row.get("hwb_class", "")
+
+        if pd.isna(lat) or pd.isna(lon) or not hwb or pd.isna(hwb):
+            continue
 
         r_epi = haversine_km(lat, lon, eq_lat, eq_lon)
         r_jb = max(0.1, math.sqrt(max(0, r_epi**2 - eq_depth**2)))
@@ -393,7 +514,9 @@ def _validate_with_shakemap(
 
     results = []
     for i, (_, row) in enumerate(confirmed.iterrows()):
-        hwb = row["hwb_class"]
+        hwb = row.get("hwb_class", "")
+        if not hwb or pd.isna(hwb):
+            continue
         sa_val = float(im_values[i])
 
         probs = damage_state_probabilities(sa_val, hwb)
