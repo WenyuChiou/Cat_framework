@@ -34,6 +34,10 @@ Thumbs.db
 
 # Reference materials (large PDFs / lecture slides)
 ref/
+data/references/
+
+# Example downloads (re-created by running scripts)
+examples/pipeline_download/
 
 # Claude Code local settings
 .claude/

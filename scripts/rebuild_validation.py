@@ -1,4 +1,4 @@
-"""Rebuild validation dataset using 1996 NBI as base inventory."""
+"""Rebuild validation dataset using 1994 NBI as base inventory."""
 import sys, io, os, re
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -43,17 +43,17 @@ def simple_hwb(material, num_spans, design_era):
     return 'HWB5'
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 1: Parse NBI96
+# STEP 1: Parse NBI94
 # ═══════════════════════════════════════════════════════════════
 basedir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-with open(os.path.join(basedir, 'data/nbi/CA96.txt'), 'r', encoding='latin-1') as f:
+with open(os.path.join(basedir, 'data/nbi/CA94.txt'), 'r', encoding='latin-1') as f:
     lines96 = f.readlines()
 
-nbi96_bridges = {}
+nbi94_bridges = {}
 for line in lines96:
     sn_raw = line[3:18].strip()
-    if not (sn_raw.startswith('53') or sn_raw.startswith('52')):
+    if not (sn_raw.startswith('53') or sn_raw.startswith('52') or sn_raw.startswith('55')):
         continue
     lat, lon = parse_latlon(line)
     if lat is None or not (33.8 <= lat <= 34.6 and -118.9 <= lon <= -118.0):
@@ -70,8 +70,8 @@ for line in lines96:
         num_spans = 1
 
     norm = normalize_sn(sn_raw)
-    if norm not in nbi96_bridges:
-        nbi96_bridges[norm] = {
+    if norm not in nbi94_bridges:
+        nbi94_bridges[norm] = {
             'structure_number': norm,
             'latitude': lat, 'longitude': lon,
             'year_built': year, 'material': material,
@@ -79,21 +79,21 @@ for line in lines96:
             'design_era': 'conventional' if year < 1975 else 'seismic'
         }
 
-print(f'NBI96 bridges in Northridge region: {len(nbi96_bridges)}')
+print(f'NBI94 bridges in Northridge region: {len(nbi94_bridges)}')
 
 # ═══════════════════════════════════════════════════════════════
 # STEP 2: Assign ShakeMap IM values
 # ═══════════════════════════════════════════════════════════════
 grid = load_shakemap(os.path.join(basedir, 'data', 'grid.xml'))
-bridge_lats = np.array([b['latitude'] for b in nbi96_bridges.values()])
-bridge_lons = np.array([b['longitude'] for b in nbi96_bridges.values()])
+bridge_lats = np.array([b['latitude'] for b in nbi94_bridges.values()])
+bridge_lons = np.array([b['longitude'] for b in nbi94_bridges.values()])
 
 pga_vals = interpolate_im(grid['LAT'].values, grid['LON'].values, grid['PGA'].values,
                           bridge_lats, bridge_lons, method='nearest')
 sa1s_vals = interpolate_im(grid['LAT'].values, grid['LON'].values, grid['PSA10'].values,
                            bridge_lats, bridge_lons, method='nearest')
 
-for i, (sn, b) in enumerate(nbi96_bridges.items()):
+for i, (sn, b) in enumerate(nbi94_bridges.items()):
     b['pga_shakemap'] = float(pga_vals[i])
     b['sa1s_shakemap'] = float(sa1s_vals[i])
 
@@ -102,7 +102,7 @@ print(f'ShakeMap PGA: {pga_vals.min():.4f} - {pga_vals.max():.4f} g')
 # ═══════════════════════════════════════════════════════════════
 # STEP 3: Load confirmed observations
 # ═══════════════════════════════════════════════════════════════
-val_old = pd.read_csv(os.path.join(basedir, 'data/validation/northridge_validation_full.csv'))
+val_old = pd.read_csv(os.path.join(basedir, 'data/validation/confirmed_observations_backup.csv'))
 confirmed = val_old[val_old['damage_confirmed'] == True]
 
 obs_lookup = {}
@@ -133,7 +133,7 @@ for _, row in nbi24.iterrows():
 # ═══════════════════════════════════════════════════════════════
 rows = []
 matched_obs = 0
-for sn, b in nbi96_bridges.items():
+for sn, b in nbi94_bridges.items():
     hwb = hwb_lookup.get(sn, simple_hwb(b['material'], b['num_spans'], b['design_era']))
     obs = obs_lookup.get(sn, None)
 
@@ -157,7 +157,7 @@ for sn, b in nbi96_bridges.items():
                'observed_damage_index': -1,
                'damage_confirmed': False,
                'damage_description': '',
-               'data_source': 'NBI96_no_observation'}
+               'data_source': 'NBI94_no_observation'}
     rows.append(row)
 
 df = pd.DataFrame(rows)
@@ -168,7 +168,7 @@ cols = ['structure_number', 'latitude', 'longitude', 'year_built', 'hwb_class',
 df = df[cols]
 
 print(f'\n=== REBUILT VALIDATION DATASET ===')
-print(f'Total bridges (NBI96 base): {len(df)}')
+print(f'Total bridges (NBI94 base): {len(df)}')
 print(f'Matched observations: {matched_obs}')
 
 conf = df[df['damage_confirmed'] == True]

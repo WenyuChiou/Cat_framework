@@ -1036,13 +1036,9 @@ def validate_gmpe_stations(
         "total_sigma": float(np.mean(stations.loc[valid, "pred_ln_sigma_sa10"].values)),
     }
 
-    # Comparison: our BSSA21 vs ShakeMap's built-in GMPE
-    diff_ln = ln_pred_ours - ln_pred_sm
-    comparison = {
-        "mean_diff_ln": float(np.mean(diff_ln)),
-        "std_diff_ln": float(np.std(diff_ln)),
-        "correlation": float(np.corrcoef(pred_ours_v, pred_sm_v)[0, 1]),
-    }
+    # Correlation: our BSSA21 predicted vs station observed
+    corr_pred_obs = float(np.corrcoef(pred_ours_v, obs_v)[0, 1])
+    metrics["correlation_pred_obs"] = corr_pred_obs
 
     # Print summary
     print(f"\n{'=' * 70}")
@@ -1052,18 +1048,16 @@ def validate_gmpe_stations(
     print(f"  Std residual (ln):      {metrics['std_residual']:.3f}")
     print(f"  RMSE (ln):              {metrics['rmse_ln']:.3f}")
     print(f"  Median obs/pred ratio:  {metrics['median_ratio']:.3f}")
+    print(f"  Correlation (pred vs obs): {corr_pred_obs:.3f}")
     print(f"  ShakeMap avg tau/phi/sigma: "
           f"{metrics['inter_event_tau']:.3f}/{metrics['intra_event_phi']:.3f}"
           f"/{metrics['total_sigma']:.3f}")
-    print(f"  Our BSSA21 vs SM GMPE:  mean diff(ln)={comparison['mean_diff_ln']:+.3f}, "
-          f"r={comparison['correlation']:.3f}")
     print(f"{'=' * 70}")
 
     return {
         "level": 1,
         "metrics": metrics,
         "per_station": stations,
-        "comparison_vs_shakemap": comparison,
     }
 
 
@@ -1075,7 +1069,7 @@ def plot_level1_gmpe(results: dict, output_dir: str) -> list[str]:
     2. Residual vs Rjb distance
     3. Residual vs Vs30
     4. Residual histogram
-    5. Our BSSA21 vs ShakeMap GMPE scatter
+    5. BSSA21 predicted vs station observed scatter
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -1206,25 +1200,63 @@ def plot_level1_gmpe(results: dict, output_dir: str) -> list[str]:
     saved.append(path)
     print(f"  Saved: {path}")
 
-    # ── 5. Our BSSA21 vs ShakeMap GMPE scatter ──
+    # ── 5. BSSA21 predicted vs station observed scatter ──
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.scatter(df["pred_sa10"], df["our_pred_sa10"], alpha=0.6, s=25,
-               c="darkorchid", edgecolors="black", linewidths=0.3)
-    lims = [0.005, max(df["pred_sa10"].max(), df["our_pred_sa10"].max()) * 1.2]
-    ax.plot(lims, lims, "k--", linewidth=1.5, label="1:1 line")
+    ax.scatter(df["our_pred_sa10"], df["obs_sa10"], alpha=0.6, s=30,
+               c="steelblue", edgecolors="black", linewidths=0.3)
+    lims = [0.005, max(df["obs_sa10"].max(), df["our_pred_sa10"].max()) * 1.2]
+    ax.plot(lims, lims, "k--", linewidth=1.5, label="1:1 line (perfect prediction)")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("ShakeMap GMPE Sa(1.0s) (g)")
-    ax.set_ylabel("Our BSSA21 Sa(1.0s) (g)")
-    comp = results.get("comparison_vs_shakemap", {})
-    ax.set_title(f"Level 1: Our BSSA21 vs ShakeMap GMPE\n"
-                 f"Δln={comp.get('mean_diff_ln', 0):+.3f}, "
-                 f"r={comp.get('correlation', 0):.3f}")
-    ax.legend()
+    ax.set_xlabel("BSSA21 Predicted Sa(1.0s) (g)")
+    ax.set_ylabel("Station Observed Sa(1.0s) (g)")
+    metrics = results.get("metrics", {})
+    ax.set_title(f"Level 1: GMPE Predicted vs Station Observed\n"
+                 f"mean residual(ln)={metrics.get('mean_residual', 0):+.3f}, "
+                 f"r={metrics.get('correlation_pred_obs', 0):.3f}, "
+                 f"N={len(df)}")
+    ax.legend(loc="upper left")
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3, which="both")
     fig.tight_layout()
-    path = os.path.join(output_dir, "validation_L1_05_bssa21_vs_sm.png")
+    path = os.path.join(output_dir, "validation_L1_05_pred_vs_obs.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    saved.append(path)
+    print(f"  Saved: {path}")
+
+    # ── 6. Spatial residual map ──
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Earthquake epicenter
+    ax.plot(-118.537, 34.213, "r*", markersize=18, zorder=10, label="Epicenter")
+
+    # Stations colored by residual
+    res_vals = df["residual_ln"].values
+    vmax = max(abs(res_vals.min()), abs(res_vals.max()))
+    sc = ax.scatter(df["lon"], df["lat"], c=res_vals, cmap="RdBu_r",
+                    s=50, edgecolors="black", linewidths=0.4, alpha=0.85,
+                    vmin=-vmax, vmax=vmax, zorder=5)
+    cbar = fig.colorbar(sc, ax=ax, shrink=0.7, label="Residual: ln(obs) − ln(pred)")
+
+    # Add basemap if contextily available
+    try:
+        import contextily as cx
+        ax.set_xlim(df["lon"].min() - 0.15, df["lon"].max() + 0.15)
+        ax.set_ylim(df["lat"].min() - 0.1, df["lat"].max() + 0.1)
+        cx.add_basemap(ax, crs="EPSG:4326", source=cx.providers.CartoDB.Positron,
+                       zoom=10, alpha=0.6)
+    except ImportError:
+        pass
+
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    m_res = results.get("metrics", {})
+    ax.set_title(f"Level 1: Spatial Distribution of GMPE Residuals (N={len(df)})\n"
+                 f"Red = GMPE under-predicts, Blue = GMPE over-predicts")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    path = os.path.join(output_dir, "validation_L1_06_spatial_residual.png")
     fig.savefig(path, dpi=150)
     plt.close(fig)
     saved.append(path)

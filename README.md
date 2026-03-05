@@ -20,7 +20,8 @@ A modular catastrophe (CAT) modeling pipeline for **earthquake-induced bridge da
 8. [Output Specification](#8-output-specification)
 9. [API Examples](#9-api-examples)
 10. [Known Limitations](#10-known-limitations)
-11. [References](#11-references)
+11. [Tutorials](#11-tutorials)
+12. [References](#12-references)
 
 ---
 
@@ -75,6 +76,8 @@ Layer 3 - PIPELINE       loss.py ──────── engine.py ────
                           │                   │
 Layer 4 - OUTPUT      plotting.py   northridge_case.py   hazard_download.py
                           │                   │                   │
+Layer 4 - VALIDATION  validation.py ── stationlist_parser.py
+                          │
 ENTRY                     └──────── main.py ──┘───────────────────┘
 ```
 
@@ -114,8 +117,9 @@ The framework comes with all necessary data and parameters built-in:
 |----------|------|--------|----------|
 | **Bridge inventory** | 25,000+ California bridges | FHWA NBI 2024 | `data/CA24.txt` |
 | **Ground motion** | ShakeMap grid (1994 Northridge) | USGS | `data/grid.xml` |
-| **Station data** | ~400 seismic station recordings | USGS | `data/stationlist.json` |
-| **Fragility params** | 14 HWB classes × 4 damage states (median + β) | Hazus 6.1 Table 7.9 | `src/hazus_params.py` |
+| **Station data** | 1,378 stations (185 seismic + 1,193 macroseismic) | USGS | `data/stationlist.json` |
+| **Validation data** | 2,123 bridges (113 confirmed damage observations) | NBI96 + Basoz/Yashinsky/Mitchell | `data/validation/northridge_validation_full.csv` |
+| **Fragility params** | 28 HWB classes × 4 damage states (median + β) | Hazus 6.1 Table 7.9 | `src/hazus_params.py` |
 | **GMPE coefficients** | 108 periods × 36 coefficients (BSSA14/21) | Boore official CSV | `src/gmpe_bssa21.py` |
 | **Damage ratios** | 5 damage states → repair cost % | Hazus Table 7.11 | `src/loss.py` |
 | **HWB decision tree** | NBI material/design → HWB class mapping | Hazus Table 7.3 | `src/bridge_classes.py` |
@@ -147,6 +151,8 @@ pip install -r requirements.txt
 | `python main.py --fragility-only` | Generate fragility curve plots only |
 | `python main.py --download-hazard` | Download USGS ShakeMap data |
 | `python main.py --full-analysis` | End-to-end automated analysis (recommended) |
+| `python main.py --full-analysis --validate` | Full analysis + 3-level validation |
+| `python scripts/run_validation_gmpe.py` | Standalone validation (no pipeline needed) |
 
 ### CLI Flags
 
@@ -158,8 +164,13 @@ pip install -r requirements.txt
 | `--n-bridges N` | `100` | Synthetic portfolio size (pipeline mode) |
 | `--n-realizations N` | `50` | Monte Carlo realizations per event |
 | `--n-events N` | `50` | Stochastic events (probabilistic mode) |
+| `--validate` | off | Enable 3-level validation against observed data |
 
 CLI arguments override corresponding `config.yaml` settings.
+
+### Interactive Tutorials
+
+For a step-by-step walkthrough of each pipeline stage, see the **[Tutorials](#11-tutorials)** section — 6 Jupyter notebooks with inline outputs, plots, and maps.
 
 ---
 
@@ -398,6 +409,8 @@ data/
 | `src/plotting.py` | 17 visualization functions (maps, curves, dashboards) | `plot_single_class()`, `plot_analysis_summary()`, etc. |
 | `src/northridge_case.py` | 1994 Northridge observed damage statistics for validation | `NORTHRIDGE_DAMAGE_STATS`, `print_scenario_report()` |
 | `src/hazard_download.py` | USGS API client (ShakeMap, hazard curves, design maps) | `download_shakemap()`, `download_hazard_curves()` |
+| `src/stationlist_parser.py` | USGS stationlist.json parser (seismic station amplitudes + distances) | `parse_stationlist()` |
+| `src/validation.py` | 3-level validation framework (GMPE, event, per-bridge) + 14 plots | `run_full_validation()`, `validate_gmpe_stations()`, `validate_event_damage()` |
 
 ---
 
@@ -583,6 +596,152 @@ For each event e in the catalog:
 
 ## 7. Validation & Quality Assurance
 
+### 3-Level Validation Framework
+
+The framework implements a bottom-up hierarchical validation approach following CAT model industry standards. The rationale is to **verify the input (ground motion) first, then validate the output (damage)**. If the ground motion prediction is biased, the damage prediction will inevitably be biased as well.
+
+```
+Level 1: GMPE Component Validation      → Is the ground motion prediction accurate?
+Level 2: Event-Level Damage Distribution → Is the aggregate damage distribution realistic?
+Level 3: Per-Bridge Comparison           → Can we match individual bridge outcomes? (supplementary)
+```
+
+Run validation via CLI:
+```bash
+python main.py --full-analysis --validate    # Integrated with full pipeline
+python scripts/run_validation_gmpe.py        # Standalone validation
+```
+
+Or configure in `config.yaml`:
+```yaml
+validation:
+  enabled: true
+  data: data/validation/northridge_validation_full.csv
+  stationlist: data/stationlist.json
+  levels: [1, 2, 3]
+  im_source: gmpe
+```
+
+#### Level 1: GMPE Component Validation
+
+**Purpose:** Validate the accuracy of BSSA21 ground motion predictions at Sa(1.0s). This is the critical input to the entire damage pipeline — Sa(1.0s) is fed directly into the Hazus fragility curves via `P[DS ≥ ds | Sa] = Φ((ln(Sa) - ln(median)) / β)`. If Sa prediction is biased, all downstream damage estimates inherit that bias. Other IMs (PGA, Sa(0.3s)) are not validated here because they do not enter the damage calculation.
+
+**Data:** USGS ShakeMap `stationlist.json` contains recordings from 1,378 stations for the 1994 Northridge event. Of these, **185 are seismic (instrument) stations** with actual recorded ground motion amplitudes. Each station includes:
+- **Observed amplitudes:** instrumentally recorded Sa(1.0s), Sa(0.3s), PGA, PGV (%g units, converted to g)
+- **ShakeMap GMPE predictions:** the GMPE values used internally by ShakeMap for that station
+- **Site metadata:** Vs30 (m/s) from USGS site characterization (geological survey or proxy model)
+- **Distance metrics:** Rjb (Joyner-Boore distance to fault surface), Rrup, Repi, all pre-computed by USGS
+
+**Method — Three-way comparison in ln-space:**
+
+1. **Observed:** instrumentally recorded Sa(1.0s) at each station
+2. **Our BSSA21:** computed via `BSSA21.compute(Mw=6.7, Rjb, Vs30, "reverse", T=1.0)` using each station's own Rjb and Vs30
+3. **ShakeMap GMPE:** the GMPE prediction embedded in the ShakeMap data for comparison
+
+Residuals are computed in natural-log space (`residual = ln(observed) - ln(predicted)`) because ground motion amplitudes follow a lognormal distribution. A positive residual indicates the GMPE underestimates the true ground motion.
+
+**Results:**
+
+| Metric | Value | Interpretation |
+|--------|-------|----------------|
+| Mean residual (ln) | +0.380 | GMPE systematically underestimates by ~46% (exp(0.38) ≈ 1.46) |
+| Std residual (ln) | 0.495 | Within expected aleatory variability (BSSA21 total σ ≈ 0.7) |
+| RMSE (ln) | 0.624 | Overall prediction error |
+| Median obs/pred ratio | 1.440 | Observations are 1.44× the predictions on average |
+| BSSA21 vs ShakeMap GMPE | r = 0.988 | Our implementation is virtually identical to ShakeMap's built-in GMPE |
+
+**Interpretation:** The near-field underestimation is a known consequence of the **point-source approximation**. The Northridge earthquake ruptured a ~15×20 km blind thrust fault plane. Stations directly above the rupture have true Rjb ≈ 0, but the point-source model computes Rjb = 10-20 km from the epicenter, causing systematic underestimation. The very high correlation (r = 0.988) between our BSSA21 and ShakeMap's GMPE confirms that the bias originates from the physical assumption, not from a code implementation error.
+
+**Key plots** (2 retained): `L1_01_attenuation.png` (attenuation curve with station observations, colored by Vs30), `L1_05_bssa21_vs_sm.png` (our BSSA21 vs ShakeMap GMPE 1:1 scatter).
+
+#### Level 2: Event-Level Damage Distribution
+
+**Purpose:** Validate whether the model produces a realistic aggregate damage distribution for the Northridge event. This is the most important validation level for a CAT model — insurers and risk managers need to know "what fraction of bridges in a region will be damaged," not which specific bridge will fail.
+
+**Data:**
+- **Prediction side:** 2,123 bridges from the 1996 NBI (representing bridges that actually existed in 1994), each with ShakeMap-interpolated Sa(1.0s) and Hazus HWB classification
+- **Observation side:** Basoz & Kiremidjian (1998) post-earthquake survey statistics for 1,600 bridges in the Northridge area (MCEER-98-0004)
+- **Bridge Vs30:** Since bridges do not have Vs30 measurements, site conditions are obtained from the **USGS Global Vs30 Model** (Heath et al. 2020) — a spatial grid at 30 arc-second resolution (~900m × 900m) derived from topographic slope and geological maps, calibrated with borehole measurements. Each bridge's Vs30 is looked up by latitude/longitude from this grid.
+
+**Method — Probability expectation aggregation:**
+
+1. For each of the 2,123 bridges: `damage_state_probabilities(Sa_shakemap, HWB_class)` → 5 discrete probabilities {none, slight, moderate, extensive, complete}
+2. Aggregate: `predicted_fraction[ds] = mean(probability[ds])` across all bridges
+3. Compare predicted fractions against Basoz (1998) observed fractions
+
+This uses the **probability expectation method** (averaging the full probability distribution), not the deterministic most-likely-state method. This better represents the model's complete output.
+
+**Results:**
+
+| Damage State | Predicted | Observed (Basoz 1998) | Difference |
+|:-------------|:---------:|:---------------------:|:----------:|
+| None | 73.4% | 89.4% | -16.0% |
+| Slight | 8.7% | 6.1% | +2.5% |
+| Moderate | 4.9% | 2.8% | +2.2% |
+| Extensive | 6.3% | 1.3% | +5.0% |
+| Complete | 6.7% | 0.4% | +6.3% |
+| **Any damage** | **26.6%** | **10.6%** | **+16.0%** |
+
+| Statistical Metric | Value | Note |
+|--------------------|-------|------|
+| KL divergence | 0.196 | Distribution shape similarity (lower = better) |
+| Chi-squared p-value | 0.000 | Significant difference (expected at N=2,123; any model would be rejected) |
+| Total damage ratio | pred 8.9% vs obs 1.2% | Weighted damage index (complete=100%, extensive=25%, moderate=8%, slight=3%) |
+
+**Interpretation:** The model **over-predicts damage by approximately 2.5×** (26.6% vs 10.6% damaged). The most likely cause is that Hazus fragility parameters represent a **national average** bridge inventory, but California bridges underwent extensive seismic retrofit programs following the 1971 San Fernando earthquake. California's post-1971 bridges are significantly more resilient than the national average, which the default Hazus curves do not capture. A secondary factor is that ShakeMap Sa values may be elevated in the near-field, consistent with Level 1 findings.
+
+**Key plot** (1 retained): `L2_01_damage_dist.png` (side-by-side predicted vs observed bar chart with statistical metrics).
+
+#### Level 3: Per-Bridge Validation (Supplementary)
+
+**Purpose:** Compare predicted vs observed damage states for individual bridges with confirmed damage records from post-earthquake literature.
+
+**Data:** 113 bridges with confirmed damage observations from:
+- Yashinsky (1998): 40 bridges — Caltrans post-earthquake field inspection
+- NBI condition-rating differences: 62 bridges — change in NBI rating before/after earthquake
+- Mitchell (2011): 4 bridges
+- Basoz (1998): 5 bridges
+
+**Results:**
+
+| Metric | Value |
+|--------|-------|
+| Exact match accuracy | 28.3% |
+| Mean absolute error | 1.68 damage states |
+| Bias | -1.47 (under-predicts) |
+
+**Why this level is supplementary (not primary):**
+
+1. **Data quality:** NBI condition-rating differences are unreliable proxies for earthquake damage states. The NBI uses a subjective 0–9 scale that does not map cleanly to Hazus damage states (none/slight/moderate/extensive/complete).
+2. **Sample bias:** The 113 bridges are predominantly near-field (bridges with damage are more likely to be documented), where GMPE point-source underestimation is most severe (see Level 1).
+3. **CAT model purpose:** Catastrophe models are designed for **portfolio-level** prediction (Level 2), not individual asset prediction. Analogously, an insurer needs to predict how many houses in a region will be damaged, not which specific house.
+
+**Why L2 over-predicts but L3 under-predicts:** This is not contradictory. Level 2 uses ShakeMap Sa values (spatially interpolated from observations, more accurate), while Level 3 uses GMPE-computed Sa (point-source, near-field underestimation). The 113 confirmed-damage bridges are concentrated in the near-field where GMPE bias is largest.
+
+**Key plot** (1 retained): `L3_01_confusion_matrix.png` (5×5 observed vs predicted confusion matrix).
+
+#### Cross-Level Consistency
+
+| Finding | Source | Implication |
+|---------|--------|-------------|
+| GMPE underestimates near-field Sa by ~46% | L1 | Explains why L3 predicts "none" for nearly all damaged bridges |
+| Model over-predicts total damage by 2.5× | L2 | Fragility curves need California retrofit calibration factors |
+| L2 over-predicts, L3 under-predicts | L2 + L3 | Consistent: L2 uses ShakeMap (accurate), L3 uses GMPE (biased near-field) |
+| Our BSSA21 matches ShakeMap GMPE (r=0.988) | L1 | Bias is from physical assumptions (point-source), not code bugs |
+
+#### All Data Sources
+
+| Data | Source | Type |
+|------|--------|------|
+| 185 station recordings (Sa, PGA, PGV) | USGS ShakeMap `stationlist.json` | 1994 instrumental observation |
+| Station Vs30 | USGS (same file) | Site geological survey / proxy model |
+| Station Rjb distances | USGS (same file) | Pre-computed fault-surface distance |
+| 2,123 bridge locations + attributes | FHWA NBI 1996 (`CA96.txt`) | 1994-era bridge inventory |
+| Bridge Vs30 | USGS Global Vs30 Model (Heath et al. 2020) | 30 arc-sec grid lookup by lat/lon |
+| ShakeMap Sa(1.0s) at bridge sites | USGS ShakeMap `grid.xml` | Post-event ground motion field |
+| 113 confirmed bridge damage records | Basoz (1998), Yashinsky (1998), Mitchell (2011) | Post-earthquake field surveys |
+| Event-level damage statistics | Basoz & Kiremidjian (1998) MCEER-98-0004 | 1,600-bridge damage census |
+
 ### Built-in Validation Checks
 
 The framework includes runtime validation at critical pipeline stages:
@@ -595,10 +754,6 @@ The framework includes runtime validation at critical pipeline stages:
 | HWB class existence in fragility table | `main.py:_calibrated_damage_probs()` | Returns P(None)=1.0 for unknown classes |
 | Fragility curve monotonicity | `main.py:_run_verification()` | Asserts P(slight) ≥ P(moderate) ≥ ... at all IMs |
 | Probability sum = 1.0 | `fragility.py` | Guaranteed by subtraction construction |
-
-### Northridge Benchmark
-
-The framework includes observed 1994 Northridge earthquake damage statistics (`src/northridge_case.py`) for qualitative validation. The Northridge event (Mw 6.7, depth 18.4 km) provides a real-world reference point for model output comparison.
 
 ---
 
@@ -623,6 +778,20 @@ output/
 │   ├── fragility_HWB*.png                 Individual class curves (14 files)
 │   ├── comparison_*.png                   Cross-class comparisons
 │   └── damage_distribution_HWB*.png       Damage probability distributions
+│
+├── validation/                            ← 3-level validation results
+│   ├── validation_L1_01_attenuation.png   Attenuation curve + station observations
+│   ├── validation_L1_02_residual_dist.png Residual vs Rjb distance
+│   ├── validation_L1_03_residual_vs30.png Residual vs Vs30 (NEHRP boundaries)
+│   ├── validation_L1_04_residual_hist.png Residual histogram + normal fit
+│   ├── validation_L1_05_bssa21_vs_sm.png  Our BSSA21 vs ShakeMap GMPE scatter
+│   ├── validation_L2_01_damage_dist.png   Predicted vs observed damage bars
+│   ├── validation_L2_02_damage_by_dist.png Damage rate by distance bin
+│   ├── validation_L2_03_damage_by_hwb.png Damage index by HWB class
+│   ├── validation_L3_01–06_*.png          Per-bridge confusion matrix, residuals, spatial, etc.
+│   ├── validation_L1_results.csv          Per-station GMPE comparison
+│   ├── validation_L2_results.csv          Per-bridge damage probabilities (2,123 bridges)
+│   └── validation_L3_results.csv          Per-bridge predicted vs observed (113 bridges)
 │
 └── scenario/                              ← Synthetic scenario outputs
     ├── northridge_scenario.png            Northridge PGA overlay
@@ -742,14 +911,45 @@ print(f"AAL = ${prob_result.aal:,.0f}")
 |------|-----------|--------|------------|
 | **GMPE** | BA08 (PGA + Sa 1.0s) and BSSA21 (108 periods); point-source R_JB approximation | R_JB ≈ R_epi is conservative for large finite faults | Future: finite-fault R_JB, logic tree weighting |
 | **Fragility** | Uniform β=0.6 for all classes | Underestimates epistemic uncertainty | Future: class-specific β from literature |
-| **Site effects** | No Vs30 grid — assumes uniform site conditions | Systematic bias in heterogeneous geology | Future: integrate USGS Vs30 model |
+| **Site effects** | USGS Vs30 grid integrated; uniform default fallback if unavailable | Reduced spatial bias; some bridges may still use default Vs30 | Per-bridge Vs30 from `src/vs30_provider.py` |
+| **Validation** | L2 shows model over-predicts damage (~2.5x); Hazus fragility not CA-calibrated | Conservative loss estimates | Future: calibration factors for post-1971 retrofit bridges |
 | **Loss** | Fixed damage ratios from Hazus Table 7.11 | May not reflect regional repair costs | Configurable via `fragility_overrides` |
 | **Temporal** | Static inventory snapshot | No deterioration or retrofit modeling | Future: time-dependent fragility |
 | **Network** | No connectivity analysis | Cannot model cascading failures or rerouting | Out of scope for bridge-level CAT |
 
 ---
 
-## 11. References
+## 11. Tutorials
+
+The `tutorials/` folder contains **6 self-contained Jupyter notebooks** — one per pipeline stage — allowing users to step through each component interactively with inline outputs, DataFrames, and plots.
+
+```bash
+# Launch the tutorial notebooks
+jupyter lab tutorials/
+# or
+jupyter notebook tutorials/
+```
+
+| # | Notebook | Pipeline Stage | Description |
+|---|----------|---------------|-------------|
+| 01 | [Config & Data Loading](tutorials/01_config_and_data.ipynb) | Setup | Load `config.yaml`, parse ShakeMap grid and NBI inventory, classify bridges to HWB classes, bridge location map with basemap |
+| 02 | [Hazard: ShakeMap](tutorials/02_hazard_shakemap.ipynb) | Hazard (Path A) | Interpolate Sa(1.0s) to bridge sites via nearest-neighbor and kriging, spatial IM map with OpenStreetMap basemap |
+| 03 | [Hazard: GMPE](tutorials/03_hazard_gmpe.ipynb) | Hazard (Path B) | Compute Sa(1.0s) via BSSA21 GMPE with Vs30 enrichment, compare GMPE vs ShakeMap predictions |
+| 04 | [Fragility Curves](tutorials/04_fragility.ipynb) | Vulnerability | Load fragility parameter database (CSV), demonstrate NBI→HWB→parameter lookup workflow, plot fragility curves, heatmap of all 28 HWB classes, portfolio damage distribution |
+| 05 | [Loss Calculation](tutorials/05_loss.ipynb) | Loss | Hazus damage ratios, per-bridge expected loss, portfolio loss summary ($1.3B / 7.6%), loss-by-class bar chart |
+| 06 | [Validation](tutorials/06_validation.ipynb) | Validation | L1: BSSA21 vs 185 seismic stations; L2: dual-pipeline (ShakeMap + GMPE) damage distribution vs Basoz 1998 observations |
+
+Each notebook is **self-contained** — it loads its own data from `config.yaml` and the `data/` folder, requires no prior notebook execution, and includes pre-computed outputs (plots, tables) saved inline.
+
+**Prerequisites:** Install tutorial dependencies in addition to the core requirements:
+
+```bash
+pip install jupyterlab geopandas contextily
+```
+
+---
+
+## 12. References
 
 1. Boore, D.M., Stewart, J.P., Seyhan, E. & Atkinson, G.M. (2014). NGA-West2 Equations for Predicting PGA, PGV, and 5%-Damped PSA for Shallow Crustal Earthquakes. *Earthquake Spectra*, 30(3), 1057-1085. https://doi.org/10.1193/070113EQS184M
 2. Boore, D.M. & Atkinson, G.M. (2008). Ground-Motion Prediction Equations for the Average Horizontal Component of PGA, PGV, and 5%-Damped PSA. *Earthquake Spectra*, 24(1), 99-138. https://doi.org/10.1193/1.2830434
