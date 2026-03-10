@@ -125,7 +125,7 @@ analysis:
 #   Level 3: Per-bridge damage state comparison (supplementary)
 # validation:
 #   enabled: true
-#   data: data/validation/northridge_validation_full.csv
+#   data: data/validation/northridge_1994_validation.csv
 #   stationlist: data/stationlist.json
 #   levels: [1, 2, 3]
 #   im_source: gmpe          # gmpe or shakemap

@@ -14,7 +14,7 @@ from src.validation import run_full_validation, run_validation, plot_validation_
 
 # ── Configuration ──
 basedir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-validation_csv = os.path.join(basedir, 'data/validation/northridge_validation_full.csv')
+validation_csv = os.path.join(basedir, 'data/validation/northridge_1994_validation.csv')
 stationlist_json = os.path.join(basedir, 'data/stationlist.json')
 
 # Build a minimal config with Northridge scenario defaults

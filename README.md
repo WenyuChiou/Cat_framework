@@ -166,7 +166,7 @@ CAT411_framework/
 │   ├── CA24.txt                NBI bridge inventory (California, 25,000+)
 │   ├── grid.xml                USGS ShakeMap (1994 Northridge)
 │   ├── stationlist.json        Seismic station recordings (1,378 stations)
-│   ├── nbi_classified.csv      Pre-classified bridge inventory (generated)
+│   ├── nbi_classified_2024.csv Pre-classified bridge inventory (NBI 2024, generated)
 │   └── validation/             Validation datasets (113 confirmed observations)
 ├── tutorials/                  6 Jupyter notebook walkthroughs
 ├── docs/                       Architecture diagrams & planning docs

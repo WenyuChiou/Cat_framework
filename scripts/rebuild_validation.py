@@ -122,7 +122,7 @@ print(f'Non-none: {sum(1 for v in obs_lookup.values() if v["observed_damage_stat
 # ═══════════════════════════════════════════════════════════════
 # STEP 4: HWB from 2024 NBI where available
 # ═══════════════════════════════════════════════════════════════
-nbi24 = pd.read_csv(os.path.join(basedir, 'data/nbi_classified.csv'))
+nbi24 = pd.read_csv(os.path.join(basedir, 'data/nbi_classified_2024.csv'))
 hwb_lookup = {}
 for _, row in nbi24.iterrows():
     norm = normalize_sn(row['structure_number'])
@@ -184,6 +184,6 @@ print(f'(Basoz reported ~6.7% = 221/3318)')
 high_pga = df[(df['pga_shakemap'] > 0.4) & (df['damage_confirmed'] == False)]
 print(f'\nBridges with PGA > 0.4g but no confirmed status: {len(high_pga)}')
 
-outpath = os.path.join(basedir, 'data/validation/northridge_validation_full.csv')
+outpath = os.path.join(basedir, 'data/validation/northridge_1994_validation.csv')
 df.to_csv(outpath, index=False, encoding='utf-8')
 print(f'\nSaved: {outpath}')

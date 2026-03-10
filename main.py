@@ -952,7 +952,7 @@ def main():
         cfg.validation_enabled = True
         if not cfg.validation_data:
             # Default validation data path
-            cfg.validation_data = "data/validation/northridge_validation_full.csv"
+            cfg.validation_data = "data/validation/northridge_1994_validation.csv"
 
     validate_config(cfg)
 
