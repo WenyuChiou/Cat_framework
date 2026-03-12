@@ -169,6 +169,9 @@ def _bilinear(
     Assumes ShakeMap grid is approximately regular (which it is).
     Uses scipy RegularGridInterpolator for efficiency.
     Falls back to griddata if grid is irregular.
+
+    Note: Regular-grid assumption holds for USGS ShakeMap products
+    but may fail for user-supplied grids with non-uniform spacing.
     """
     from scipy.interpolate import RegularGridInterpolator
 

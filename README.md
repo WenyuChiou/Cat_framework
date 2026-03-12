@@ -228,6 +228,8 @@ For methodology details, data sources, and diagnostic plots, see [Tutorial 06](t
 | Loss | Fixed Hazus damage ratios | Configurable via `fragility_overrides` |
 | Temporal | Static inventory snapshot | Future: time-dependent fragility |
 | Network | No connectivity / cascading failure analysis | Out of scope for bridge-level CAT |
+| Validation | L2 uses 2024 NBI (2,953 bridges) vs 1994 observations (1,600 bridges) | Future: use 1994 NBI for consistent comparison |
+| Simplified GMPEs | 7 simplified models use representative coefficients, not official | Use `bssa21` for production; simplified models for teaching only |
 
 ---
 
