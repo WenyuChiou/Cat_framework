@@ -182,7 +182,7 @@ CAT411_framework/
 
 ## Tutorials
 
-The `tutorials/` folder contains **6 self-contained Jupyter notebooks**, one per pipeline stage, with inline outputs, DataFrames, and plots.
+The [`tutorials/`](tutorials/README.md) folder contains **5 self-contained Jupyter notebooks**, one per pipeline stage, with inline outputs, DataFrames, and plots.
 
 ```bash
 pip install jupyterlab geopandas contextily    # additional dependencies
@@ -195,10 +195,9 @@ jupyter lab tutorials/
 | 02 | [Hazard: ShakeMap](tutorials/02_hazard_shakemap.ipynb) | Hazard (Path A) | Interpolate Sa to bridge sites, spatial IM maps |
 | 03 | [Hazard: GMPE](tutorials/03_hazard_gmpe.ipynb) | Hazard (Path B) | Compute Sa via BSSA21, compare GMPE vs ShakeMap |
 | 04 | [Fragility Curves](tutorials/04_fragility.ipynb) | Vulnerability | Fragility parameters, HWB lookup, curve plotting |
-| 05 | [Loss Calculation](tutorials/05_loss.ipynb) | Loss | Damage ratios, per-bridge loss, portfolio aggregation |
-| 06 | [Validation](tutorials/06_validation.ipynb) | Validation | L1-L3 validation against 1994 Northridge observations |
+| 05 | [Validation](tutorials/05_validation.ipynb) | Validation | Attenuation curve, dual-pipeline damage distribution vs Basoz 1998 |
 
-Each notebook is self-contained -- no prior notebook execution required.
+Each notebook is self-contained -- no prior notebook execution required. See [`tutorials/README.md`](tutorials/README.md) for details.
 
 ---
 
