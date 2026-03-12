@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
 # Generated outputs (re-created by running main.py)
 output/
@@ -9,21 +10,17 @@ output/
 # Vs30 data (large global grid, download via: python -m src.vs30_provider --download)
 data/vs30/global_vs30.grd
 
-# Data files (large, downloaded via --download)
-data/plots/
+# Data files (large, downloaded via --download-hazard)
 data/grid.xml
 data/stationlist.json
 data/CA24.txt
-data/nbi/CA*.txt
-data/nbi/raw/
-data/nbi/clean/
-data/nbi/curated/
-data/nbi/logs/
-data/nbi/meta/*.json
-!data/nbi/meta/nbi_pipeline.json
-data/hazard/usgs/shakemap/raw/
-data/hazard/usgs/shakemap/logs/
-data/hazard/usgs/shakemap/meta/
+data/plots/
+
+# NBI pipeline intermediates (re-created by broker/ingest)
+data/nbi/
+
+# USGS download cache
+data/hazard/
 
 # Validation results (re-created by running validation)
 data/validation/validation_results_*.csv
@@ -36,10 +33,20 @@ Thumbs.db
 ref/
 data/references/
 
-# Example downloads (re-created by running scripts)
-examples/pipeline_download/
+# Temporary generated documents
+update_docx.py
+generate_docx.py
 
-# Claude Code local settings
+# Example downloads
+examples/
+
+# Development tools (local only)
+broker/
+hooks/
+.zencoder/
+.zenflow/
+
+# Claude Code / AI local settings
 .claude/
 .ai/
 
@@ -51,6 +58,3 @@ examples/pipeline_download/
 .DS_Store
 nul
 
-# Temporary scripts
-update_docx.py
-generate_docx.py
