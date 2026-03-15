@@ -16,6 +16,9 @@ data/stationlist.json
 data/CA24.txt
 data/plots/
 
+# GMPE validation data (large, used by scripts/run_gmpe_nga_west2.py)
+data/northridge_validation_full.xlsx
+
 # NBI pipeline intermediates (re-created by broker/ingest)
 data/nbi/
 
