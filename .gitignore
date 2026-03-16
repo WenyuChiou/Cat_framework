@@ -19,6 +19,11 @@ data/plots/
 # GMPE validation data (large, used by scripts/run_gmpe_nga_west2.py)
 data/northridge_validation_full.xlsx
 
+# Real validation data (used by scripts/run_validation_real.py)
+data/northridge_observed.csv
+data/real_observed.csv
+data/real_predicted.csv
+
 # NBI pipeline intermediates (re-created by broker/ingest)
 data/nbi/
 
