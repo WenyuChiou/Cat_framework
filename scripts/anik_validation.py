@@ -1,29 +1,17 @@
 """
-src/validation.py
-=================
-CAT411 Vulnerability Validation Framework — Anik Das (T1a / T1b)
+Validation Framework for Bridge Damage State Predictions.
 
-Purpose:
-    Compare model-predicted damage states against observed damage states
-    for the 1994 Northridge earthquake bridge portfolio.
+Author: Anik Das (original), integrated into CAT411 framework.
 
-Functions:
-    - load_observed(csv_path)           → pd.DataFrame
-    - load_predicted(csv_path)          → pd.DataFrame
-    - merge_predictions(observed, predicted) → pd.DataFrame
-    - confusion_matrix_ds(predicted_ds, observed_ds) → np.ndarray
-    - compute_metrics(conf_matrix, damage_states) → dict
-    - log_residual_analysis(merged_df)  → dict
-    - plot_confusion_matrix(conf_matrix, damage_states, save_path)
-    - plot_per_class_accuracy(metrics, save_path)
-    - plot_log_residuals(residuals, save_path)
-    - run_validation(observed_csv, predicted_csv, output_dir)
+Compares model-predicted damage states against observed damage states,
+producing confusion matrix, per-class metrics, residual analysis, and
+acceptance criteria summary.
 
-Design note (data swap):
-    All I/O goes through load_observed() / load_predicted().
-    To swap synthetic → real data, just change the csv_path argument.
-    Column schema is fixed: bridge_id, latitude, longitude,
-    observed_damage / predicted_damage (optional: sa_predicted).
+Called by: scripts/run_validation_real.py
+
+Column schema (both CSVs):
+    bridge_id, observed_damage / predicted_damage
+    (optional: latitude, longitude, sa_predicted)
 """
 
 import os
@@ -55,12 +43,8 @@ def load_observed(csv_path: str) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame  with dtypes validated and damage labels lowercased.
-
-    DATA-SWAP NOTE:
-        Replace csv_path with Sirisha's real northridge_observed.csv
-        when available (Sprint 2).  Schema must match the above.
     """
-    df = pd.read_csv(csv_path, dtype={"bridge_id": str})
+    df = pd.read_csv(csv_path, dtype={"bridge_id": str}, encoding="utf-8")
     df["observed_damage"] = df["observed_damage"].str.lower().str.strip()
     _validate_damage_column(df, "observed_damage", csv_path)
     return df
@@ -72,19 +56,14 @@ def load_predicted(csv_path: str) -> pd.DataFrame:
 
     Expected columns:
         bridge_id        : str
-        predicted_damage : str  — most-likely damage state
+        predicted_damage : str  — assigned damage state
         sa_predicted     : float (optional) — Sa(1.0s) used for residuals
 
     Returns
     -------
     pd.DataFrame with dtypes validated.
-
-    DATA-SWAP NOTE:
-        In Sprint 2, plug in the real pipeline output CSV from
-        output/analysis/bridge_damage_results.csv (adjust column names
-        if needed — only bridge_id and predicted_damage are required).
     """
-    df = pd.read_csv(csv_path, dtype={"bridge_id": str})
+    df = pd.read_csv(csv_path, dtype={"bridge_id": str}, encoding="utf-8")
     df["predicted_damage"] = df["predicted_damage"].str.lower().str.strip()
     _validate_damage_column(df, "predicted_damage", csv_path)
     return df
@@ -204,7 +183,7 @@ def log_residual_analysis(merged_df: pd.DataFrame) -> dict:
     obs_idx = merged_df["observed_damage"].map(DS_INDEX).values.astype(float)
     pred_idx = merged_df["predicted_damage"].map(DS_INDEX).values.astype(float)
 
-    # Shift by 1 to avoid log(0); residual in ordinal space
+    # Ordinal residual: positive = over-prediction, negative = under-prediction
     residuals = pred_idx - obs_idx
     mean_r = residuals.mean()
     std_r = residuals.std()
@@ -344,7 +323,7 @@ def plot_damage_distribution(merged_df: pd.DataFrame,
                              save_path: str) -> None:
     """
     Side-by-side bar chart: observed vs predicted damage fractions.
-    Mirrors the L2 comparison in notebook 06_validation.
+    Mirrors the L2 comparison in notebook 05_validation.
     """
     obs_counts = merged_df["observed_damage"].value_counts()
     pred_counts = merged_df["predicted_damage"].value_counts()
@@ -381,7 +360,7 @@ def plot_damage_distribution(merged_df: pd.DataFrame,
 def build_acceptance_table(metrics: dict,
                            residual_dict: dict) -> pd.DataFrame:
     """
-    Return a summary DataFrame matching the format in notebook 06_validation.
+    Return a summary DataFrame matching the format in notebook 05_validation.
 
     Thresholds (from notebook):
         Overall accuracy  ≥ 0.60
