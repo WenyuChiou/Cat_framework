@@ -7,19 +7,30 @@ Compares model-predicted damage states against observed damage states,
 producing confusion matrix, per-class metrics, residual analysis, and
 acceptance criteria summary.
 
-Called by: scripts/run_validation_real.py
+Includes MLE fragility calibration support: calibrate_and_validate() runs
+the full pipeline with both baseline (HAZUS defaults) and MLE-calibrated
+parameters, producing a side-by-side comparison.
+
+Can be run directly:
+    python scripts/anik_validation.py                # both baseline + calibrated
+    python scripts/anik_validation.py --baseline     # baseline only
+    python scripts/anik_validation.py --calibrated   # calibrated only
 
 Column schema (both CSVs):
     bridge_id, observed_damage / predicted_damage
     (optional: latitude, longitude, sa_predicted)
 """
 
+import json
 import os
+import sys
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from scipy import stats
+from scipy.stats import norm
 
 # ── Damage state ordering ──────────────────────────────────────────────────
 DAMAGE_STATES = ["none", "slight", "moderate", "extensive", "complete"]
@@ -484,3 +495,303 @@ def run_validation(observed_csv: str,
         "residuals": residuals,
         "acceptance": acceptance,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 9.  FRAGILITY PREDICTION (exceedance-threshold method)
+# ══════════════════════════════════════════════════════════════════════
+
+def predict_damage_state(
+    sa: float,
+    hwb_class: str,
+    hazus_params: dict,
+    k: float = 1.0,
+    beta: float = 0.6,
+    threshold: float = 0.5,
+) -> str:
+    """
+    Assign damage state via exceedance-threshold method.
+
+    Checks from complete → slight: return the highest DS where
+    P(DS >= j) >= threshold.  This replaces the original argmax method
+    which cannot predict moderate with beta=0.6.
+    """
+    if sa <= 0:
+        return "none"
+    ds_order = ["slight", "moderate", "extensive", "complete"]
+    params = hazus_params.get(hwb_class)
+    if params is None:
+        return "none"
+    ds_params = params["damage_states"]
+    for ds in reversed(ds_order):
+        median = ds_params[ds]["median"] * k
+        p_exc = float(norm.cdf(np.log(sa / median) / beta))
+        if p_exc >= threshold:
+            return ds
+    return "none"
+
+
+def generate_predictions(bridges_df, hazus_params, k=1.0, beta=0.6):
+    """
+    Generate predicted damage states for all bridges.
+
+    Parameters
+    ----------
+    bridges_df : DataFrame
+        Must have columns: bridge_id, sa1s_shakemap, hwb_class
+    hazus_params : dict
+        HAZUS_BRIDGE_FRAGILITY dict from src.hazus_params
+    k, beta : float
+        Calibration parameters (k=1.0, beta=0.6 for HAZUS defaults)
+
+    Returns
+    -------
+    DataFrame with columns: bridge_id, predicted_damage, sa_predicted
+    """
+    preds = bridges_df.apply(
+        lambda row: predict_damage_state(
+            row["sa1s_shakemap"], row["hwb_class"], hazus_params,
+            k=k, beta=beta,
+        ),
+        axis=1,
+    )
+    return pd.DataFrame({
+        "bridge_id": bridges_df["bridge_id"],
+        "predicted_damage": preds,
+        "sa_predicted": bridges_df["sa1s_shakemap"],
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 10. COMPARISON PLOT
+# ══════════════════════════════════════════════════════════════════════
+
+def plot_comparison(results_base, results_cal, k_cal, beta_cal, save_path):
+    """Side-by-side comparison: baseline vs calibrated."""
+    DS = DAMAGE_STATES
+    mb = results_base["metrics"]
+    mc = results_cal["metrics"]
+    rb = results_base["residuals"]
+    rc = results_cal["residuals"]
+
+    obs_c = [results_base["merged"]["observed_damage"].value_counts().get(d, 0) for d in DS]
+    base_c = [results_base["merged"]["predicted_damage"].value_counts().get(d, 0) for d in DS]
+    cal_c = [results_cal["merged"]["predicted_damage"].value_counts().get(d, 0) for d in DS]
+
+    fig = plt.figure(figsize=(18, 10))
+    gs = fig.add_gridspec(2, 3, hspace=0.35, wspace=0.3)
+
+    # Top: distribution
+    ax = fig.add_subplot(gs[0, :])
+    x = np.arange(len(DS))
+    w = 0.25
+    ax.bar(x - w, obs_c, w, label="Observed", color="#2196F3", edgecolor="k")
+    ax.bar(x, base_c, w, label="Baseline (k=1.0, \u03b2=0.6)", color="#FF9800", edgecolor="k")
+    ax.bar(x + w, cal_c, w,
+           label=f"Calibrated (k={k_cal:.2f}, \u03b2={beta_cal:.2f})",
+           color="#4CAF50", edgecolor="k")
+    for i in range(len(DS)):
+        for vals, off in [(obs_c, -w), (base_c, 0), (cal_c, w)]:
+            if vals[i] > 0:
+                ax.text(x[i] + off, vals[i] + 10, str(vals[i]),
+                        ha="center", fontsize=9)
+    ax.set_xticks(x)
+    ax.set_xticklabels([d.capitalize() for d in DS], fontsize=11)
+    ax.set_ylabel("Number of Bridges")
+    ax.set_title("Damage Distribution: Observed vs Baseline vs Calibrated (N=2008)", fontsize=13)
+    ax.legend(fontsize=10)
+    ax.grid(axis="y", alpha=0.3)
+
+    # Bottom-left: accuracy
+    ax = fig.add_subplot(gs[1, 0])
+    accs = [mb["overall_accuracy"], mc["overall_accuracy"]]
+    bars = ax.bar(["Baseline", "Calibrated"], accs, color=["#FF9800", "#4CAF50"], edgecolor="k", width=0.5)
+    for bar, v in zip(bars, accs):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.01,
+                f"{v:.1%}", ha="center", fontsize=12, fontweight="bold")
+    ax.axhline(0.60, color="gray", ls=":", lw=1, label="Threshold (60%)")
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Accuracy")
+    ax.set_title("Overall Accuracy")
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+
+    # Bottom-center: bias & RMSE
+    ax = fig.add_subplot(gs[1, 1])
+    x2 = np.arange(2)
+    w2 = 0.3
+    base_vals = [abs(rb["mean_residual"]), rb["rmse"]]
+    cal_vals = [abs(rc["mean_residual"]), rc["rmse"]]
+    ax.bar(x2 - w2 / 2, base_vals, w2, label="Baseline", color="#FF9800", edgecolor="k")
+    ax.bar(x2 + w2 / 2, cal_vals, w2, label="Calibrated", color="#4CAF50", edgecolor="k")
+    for i in range(2):
+        ax.text(x2[i] - w2 / 2, base_vals[i] + 0.02, f"{base_vals[i]:.3f}", ha="center", fontsize=9)
+        ax.text(x2[i] + w2 / 2, cal_vals[i] + 0.02, f"{cal_vals[i]:.3f}", ha="center", fontsize=9)
+    ax.axhline(0.50, color="gray", ls=":", lw=1, label="Bias threshold")
+    ax.axhline(1.50, color="gray", ls="--", lw=1, label="RMSE threshold")
+    ax.set_xticks(x2)
+    ax.set_xticklabels(["|Bias|", "RMSE"])
+    ax.set_ylabel("Value")
+    ax.set_title("Bias & RMSE")
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+
+    # Bottom-right: per-class recall
+    ax = fig.add_subplot(gs[1, 2])
+    x3 = np.arange(len(DS))
+    w3 = 0.3
+    rec_b = [mb["per_class"][d]["recall"] for d in DS]
+    rec_c = [mc["per_class"][d]["recall"] for d in DS]
+    ax.bar(x3 - w3 / 2, rec_b, w3, label="Baseline", color="#FF9800", edgecolor="k")
+    ax.bar(x3 + w3 / 2, rec_c, w3, label="Calibrated", color="#4CAF50", edgecolor="k")
+    ax.axhline(0.30, color="gray", ls=":", lw=1, label="Threshold (30%)")
+    ax.set_xticks(x3)
+    ax.set_xticklabels([d.capitalize() for d in DS], fontsize=9)
+    ax.set_ylabel("Recall")
+    ax.set_title("Per-Class Recall")
+    ax.set_ylim(0, 1.05)
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+
+    fig.suptitle("Validation: Baseline (HAZUS) vs MLE-Calibrated",
+                 fontsize=15, fontweight="bold", y=0.98)
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[plot] Saved: {save_path}")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 11. CALIBRATE-AND-VALIDATE (one-stop pipeline)
+# ══════════════════════════════════════════════════════════════════════
+
+def calibrate_and_validate():
+    """
+    Full pipeline: load data → predict (baseline + calibrated) → validate → compare.
+
+    Reads calibration parameters from output/calibration/calibration_results.json.
+    If not found, runs src.calibration.calibrate_global() to produce them.
+    """
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    sys.path.insert(0, PROJECT_ROOT)
+    from src.hazus_params import HAZUS_BRIDGE_FRAGILITY
+
+    data_dir = os.path.join(PROJECT_ROOT, "data")
+    output_root = os.path.join(PROJECT_ROOT, "output", "validation_real")
+
+    # Parse flags
+    only_baseline = "--baseline" in sys.argv and "--calibrated" not in sys.argv
+    only_calibrated = "--calibrated" in sys.argv and "--baseline" not in sys.argv
+    run_both = not only_baseline and not only_calibrated
+
+    # Load bridge data
+    csv_path = os.path.join(data_dir, "northridge_observed.csv")
+    df = pd.read_csv(csv_path, encoding="utf-8")
+    df = df.rename(columns={
+        "structure_number": "bridge_id",
+        "Observed_damage": "observed_damage",
+    })
+    df["observed_damage"] = df["observed_damage"].str.lower().str.strip()
+    print(f"[load] {len(df)} bridges from northridge_observed.csv")
+
+    observed_df = df[["bridge_id", "latitude", "longitude", "observed_damage"]].copy()
+
+    # Load or compute calibration
+    cal_path = os.path.join(PROJECT_ROOT, "output", "calibration", "calibration_results.json")
+    k_cal, beta_cal = 1.0, 0.6
+    has_cal = False
+    if os.path.exists(cal_path):
+        with open(cal_path, "r", encoding="utf-8") as f:
+            cal_data = json.load(f)
+        k_cal = cal_data["k"]
+        beta_cal = cal_data["beta"]
+        has_cal = True
+        print(f"[cal]  Loaded: k={k_cal:.4f}, beta={beta_cal:.4f}")
+    else:
+        print("[cal]  No calibration file found. Running MLE calibration...")
+        from src.calibration import calibrate_global
+        from src.northridge_case import NORTHRIDGE_DAMAGE_STATS
+        result = calibrate_global(df, obs_counts=NORTHRIDGE_DAMAGE_STATS["damage_summary"])
+        k_cal = result.k
+        beta_cal = result.beta
+        has_cal = True
+        print(f"[cal]  MLE result: k={k_cal:.4f}, beta={beta_cal:.4f}")
+
+    if not has_cal and (only_calibrated or run_both):
+        print("[warn] Cannot run calibrated — falling back to baseline only.")
+        only_baseline = True
+        run_both = False
+
+    def _run_one(k, beta, label, out_dir):
+        """Predict + validate for one parameter set."""
+        os.makedirs(out_dir, exist_ok=True)
+        param_label = f"k={k:.2f}, beta={beta:.2f}"
+        print(f"\n{'='*60}")
+        print(f"  {label}  ({param_label})")
+        print(f"{'='*60}")
+
+        pred_df = generate_predictions(df, HAZUS_BRIDGE_FRAGILITY, k=k, beta=beta)
+        print(f"[pred] {pred_df['predicted_damage'].value_counts().to_dict()}")
+
+        obs_csv = os.path.join(out_dir, "observed.csv")
+        pred_csv = os.path.join(out_dir, "predicted.csv")
+        observed_df.to_csv(obs_csv, index=False, encoding="utf-8")
+        pred_df.to_csv(pred_csv, index=False, encoding="utf-8")
+
+        return run_validation(obs_csv, pred_csv, out_dir)
+
+    results_base = None
+    results_cal = None
+
+    if only_baseline or run_both:
+        results_base = _run_one(1.0, 0.6, "BASELINE (HAZUS defaults)",
+                                os.path.join(output_root, "baseline"))
+
+    if only_calibrated or run_both:
+        results_cal = _run_one(k_cal, beta_cal, "CALIBRATED (MLE)",
+                               os.path.join(output_root, "calibrated"))
+
+    # Comparison
+    if run_both and results_base and results_cal:
+        plot_comparison(results_base, results_cal, k_cal, beta_cal,
+                        os.path.join(output_root, "comparison_summary.png"))
+
+        mb = results_base["metrics"]
+        mc = results_cal["metrics"]
+        rb = results_base["residuals"]
+        rc = results_cal["residuals"]
+        print(f"\n{'='*60}")
+        print(f"  COMPARISON SUMMARY")
+        print(f"{'='*60}")
+        print(f"  {'Metric':<22} {'Baseline':>12} {'Calibrated':>12} {'Threshold':>12}")
+        print(f"  {'-'*58}")
+        print(f"  {'Accuracy':<22} {mb['overall_accuracy']:>11.1%} {mc['overall_accuracy']:>11.1%} {'>=60%':>12}")
+        print(f"  {'|Mean Residual|':<22} {abs(rb['mean_residual']):>12.3f} {abs(rc['mean_residual']):>12.3f} {'<0.50':>12}")
+        print(f"  {'RMSE':<22} {rb['rmse']:>12.3f} {rc['rmse']:>12.3f} {'<1.50':>12}")
+        for ds in DAMAGE_STATES:
+            r_b = mb["per_class"][ds]["recall"]
+            r_c = mc["per_class"][ds]["recall"]
+            print(f"  {'Recall-'+ds.capitalize():<22} {r_b:>11.1%} {r_c:>11.1%} {'>=30%':>12}")
+        print(f"{'='*60}")
+
+    # Copy calibrated (or best) results to main output dir for NB05
+    import shutil
+    best = results_cal if results_cal else results_base
+    best_dir = os.path.join(output_root, "calibrated" if results_cal else "baseline")
+    for fname in ["01_confusion_matrix.png", "02_per_class_metrics.png",
+                   "03_residual_distribution.png",
+                   "04_damage_distribution_comparison.png",
+                   "acceptance_criteria.csv"]:
+        src_f = os.path.join(best_dir, fname)
+        dst_f = os.path.join(output_root, fname)
+        if os.path.exists(src_f):
+            shutil.copy2(src_f, dst_f)
+
+    print("\n[done]")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 12. CLI ENTRY POINT
+# ══════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    calibrate_and_validate()
