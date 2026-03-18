@@ -8,8 +8,8 @@ Source : Anik Das/Validation/run_real_validation.py
 
 Usage:
   cd <project_root>
-  python scripts/run_validation_real.py            # baseline (HAZUS defaults)
-  python scripts/run_validation_real.py --calibrated  # with MLE-calibrated params
+  python scripts/run_validation_real.py            # calibrated (default, uses MLE results)
+  python scripts/run_validation_real.py --baseline # HAZUS defaults (k=1.0, beta=0.6)
 
 Input:
   data/northridge_observed.csv  (2008 bridges with observed damage + ShakeMap Sa)
@@ -112,25 +112,26 @@ def predict_damage_state(
 # ══════════════════════════════════════════════════════════════════════
 
 def main():
-    # Parse --calibrated flag
-    use_calibrated = "--calibrated" in sys.argv
+    # Parse flags: --baseline forces HAZUS defaults; otherwise use calibrated
+    use_baseline = "--baseline" in sys.argv
 
-    # Load calibration parameters if requested
+    # Default: load calibrated parameters from MLE results
     k = 1.0
     beta = 0.6
-    if use_calibrated:
-        cal_path = os.path.join(
-            PROJECT_ROOT, "output", "calibration", "calibration_results.json"
-        )
-        if os.path.exists(cal_path):
-            with open(cal_path, "r", encoding="utf-8") as f:
-                cal = json.load(f)
-            k = cal["k"]
-            beta = cal["beta"]
-            print(f"[calibrated] Using k={k:.4f}, beta={beta:.4f}")
-        else:
-            print(f"[warn] Calibration file not found: {cal_path}")
-            print("[warn] Falling back to HAZUS defaults (k=1.0, beta=0.6)")
+    cal_path = os.path.join(
+        PROJECT_ROOT, "output", "calibration", "calibration_results.json"
+    )
+    if use_baseline:
+        print("[baseline] Using HAZUS defaults (k=1.0, beta=0.6)")
+    elif os.path.exists(cal_path):
+        with open(cal_path, "r", encoding="utf-8") as f:
+            cal = json.load(f)
+        k = cal["k"]
+        beta = cal["beta"]
+        print(f"[calibrated] Using k={k:.4f}, beta={beta:.4f}")
+    else:
+        print(f"[warn] Calibration file not found: {cal_path}")
+        print("[warn] Falling back to HAZUS defaults (k=1.0, beta=0.6)")
 
     param_label = f"k={k:.2f}, β={beta:.2f}"
 
