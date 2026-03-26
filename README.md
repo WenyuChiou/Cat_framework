@@ -126,6 +126,7 @@ CLI arguments override `config.yaml` settings.
 | | `data_loader.py` | ShakeMap XML, NBI text, station JSON parsers |
 | **Pipeline** | `loss.py` | Damage-to-loss, EP curve, AAL computation |
 | | `engine.py` | Pipeline orchestrator (deterministic + probabilistic) |
+| | `calibration.py` | MLE fragility calibration (k, beta) against observed data |
 | **Output** | `plotting.py` | 17 visualization functions |
 | | `validation.py` | 3-level validation framework (14 diagnostic plots) |
 | | `hazard_download.py` | USGS API client for ShakeMap data |
@@ -194,7 +195,7 @@ jupyter lab tutorials/
 | 01 | [Config & Data Loading](tutorials/01_config_and_data.ipynb) | Setup | Load config, parse ShakeMap/NBI, classify bridges to HWB classes |
 | 02 | [Hazard: ShakeMap](tutorials/02_hazard_shakemap.ipynb) | Hazard (Path A) | Interpolate Sa to bridge sites, spatial IM maps |
 | 03 | [Hazard: GMPE](tutorials/03_hazard_gmpe.ipynb) | Hazard (Path B) | Compute Sa via BSSA21, compare GMPE vs ShakeMap |
-| 04 | [Fragility Curves](tutorials/04_fragility.ipynb) | Vulnerability | Fragility parameters, HWB lookup, curve plotting |
+| 04 | [Fragility Curves](tutorials/04_fragility.ipynb) | Vulnerability | Fragility parameters, HWB lookup, curve plotting, MLE calibration |
 | 05 | [Validation](tutorials/05_validation.ipynb) | Validation | Attenuation curve, dual-pipeline damage distribution vs Basoz 1998 |
 
 Each notebook is self-contained -- no prior notebook execution required. See [`tutorials/README.md`](tutorials/README.md) for details.
@@ -208,12 +209,94 @@ The framework includes a **3-level validation** tested against the 1994 Northrid
 | Level | What is Validated | Key Finding |
 |-------|-------------------|-------------|
 | **L1: GMPE** | BSSA21 predictions vs 185 seismic station recordings | Near-field underestimation (~46%) due to point-source approximation; implementation matches ShakeMap GMPE (r = 0.988) |
-| **L2: Event** | Aggregate damage distribution vs Basoz (1998) survey of 1,600 bridges | Model over-predicts damage ~2.5x (Hazus uses national-average fragility; CA bridges are retrofit-hardened) |
+| **L2: Event** | Aggregate damage distribution vs Basoz (1998) survey of 1,600 bridges | Baseline over-predicts ~2.5x; **MLE calibration (k=1.84) reduces to 9.5% vs 10.6% observed** |
 | **L3: Bridge** | Per-bridge predicted vs observed for 113 confirmed damage records | 28.3% exact match; supplementary level due to data quality limitations |
 
 Run validation: `python main.py --full-analysis --validate`
 
-For methodology details, data sources, and diagnostic plots, see [Tutorial 06](tutorials/06_validation.ipynb).
+For methodology details, data sources, and diagnostic plots, see [Tutorial 05](tutorials/05_validation.ipynb).
+
+---
+
+## MLE Fragility Calibration
+
+Default Hazus fragility parameters over-predict Northridge bridge damage (27.2% predicted vs 10.6% observed). The framework includes an MLE calibration module (`src/calibration.py`) that fits two global parameters against Basoz & Kiremidjian (1998) observed counts (N=1,600):
+
+| Parameter | HAZUS Default | Calibrated | Meaning |
+|-----------|--------------|------------|---------|
+| **k** (median scale factor) | 1.0 | 1.84 | All fragility medians x1.84; curves shift right |
+| **beta** (dispersion) | 0.6 | 0.26 | Steeper curves; sharper damage transitions |
+| **Damage fraction** | 27.2% | 9.5% | vs observed 10.6% |
+
+```bash
+# Run calibration
+python scripts/run_calibration.py
+
+# Run validation with calibrated parameters (default)
+python scripts/anik_validation.py
+
+# Apply to main pipeline -- add to config.yaml:
+#   calibration:
+#     global_median_factor: 1.8432
+```
+
+Ground truth: Basoz & Kiremidjian (1998) aggregate damage counts from the 1994 Northridge earthquake, stored in `src/northridge_case.py`. See [Tutorial 04](tutorials/04_fragility.ipynb) Section 7 for details.
+
+---
+
+## Missing Value Handling
+
+NBI bridge records may contain missing fields. The framework applies conservative defaults during classification:
+
+| Field | Default | Rationale |
+|-------|---------|-----------|
+| `num_spans` | 1 | Single-span assumption (most conservative) |
+| `year_built` | 1960 | Pre-seismic era (conventional design) |
+| `structure_length_m` | 30 m | Typical short-span bridge |
+| `deck_width_m` | 10 m | Standard two-lane width |
+| `material_code` | "other" | Maps to HWB28 (general category) |
+| `vs30` | 760 m/s | NEHRP B/C boundary (rock) |
+
+ShakeMap interpolation NaN (outside convex hull) is filled with nearest-neighbor. See Technical Documentation Section 6.2 for full details.
+
+---
+
+## Using Your Own Data
+
+The framework can analyze any earthquake + bridge inventory, not just Northridge.
+
+### Required Input
+
+1. **Bridge inventory CSV** with at minimum:
+
+   | Column | Type | Example |
+   |--------|------|---------|
+   | `structure_number` | string | `53 0012` |
+   | `latitude` | float | `34.0522` |
+   | `longitude` | float | `-118.2437` |
+
+   Optional: `year_built`, `material_code`, `design_code`, `num_spans`, `hwb_class` (if provided, skips auto-classification).
+
+2. **Earthquake scenario** (choose one):
+   - **ShakeMap:** `im_source: shakemap` + USGS event ID
+   - **GMPE:** `im_source: gmpe` + magnitude, depth, epicenter, fault type
+   - **Pre-computed Sa CSV:** with `structure_number` + `sa1s` columns
+
+3. **Observed damage** (optional, for validation/calibration):
+
+   | Column | Type | Allowed values |
+   |--------|------|---------------|
+   | `structure_number` | string | must match inventory |
+   | `observed_damage` | string | none, slight, moderate, extensive, complete |
+
+### Data Format Requirements
+
+- CSV with UTF-8 encoding
+- WGS84 coordinates (decimal degrees)
+- Sa in units of g
+- Damage states as lowercase strings
+
+See Technical Documentation Section 13 for complete specifications and examples.
 
 ---
 
@@ -222,7 +305,7 @@ For methodology details, data sources, and diagnostic plots, see [Tutorial 06](t
 | Area | Limitation | Mitigation Path |
 |------|-----------|-----------------|
 | GMPE | Point-source R_JB approximation | Future: finite-fault geometry |
-| Fragility | Uniform beta = 0.6; national-average curves | `fragility_overrides` in config; future CA calibration |
+| Fragility | Global 2-parameter calibration; intermediate DS ordering reversal (<0.5 bridges) | Per-class calibration with class-level damage counts |
 | Site effects | USGS Vs30 grid; default fallback if unavailable | `vs30_provider.py` per-bridge lookup |
 | Loss | Fixed Hazus damage ratios | Configurable via `fragility_overrides` |
 | Temporal | Static inventory snapshot | Future: time-dependent fragility |
