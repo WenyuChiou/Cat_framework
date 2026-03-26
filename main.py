@@ -560,6 +560,37 @@ def _compute_bridge_damage(nbi, shakemap, config=None):
         ):
             nbi.loc[row.name, col] = probs[ds_key]
 
+    # ── Replacement cost & expected loss ────────────────────────────
+    from src.exposure import estimate_replacement_cost, estimate_replacement_cost_fhwa
+    from src.loss import HAZUS_DAMAGE_RATIOS
+
+    cost_cfg = getattr(config, "cost", None) if config else None
+    for idx, row in nbi.iterrows():
+        length = float(row.get("structure_length_m", 30)) if pd.notna(row.get("structure_length_m")) else 30.0
+        width = float(row.get("deck_width_m", 10)) if pd.notna(row.get("deck_width_m")) else 10.0
+        deck_area = length * width
+        material = row.get("material", "other")
+
+        if cost_cfg is not None:
+            max_span = float(row.get("max_span_length_m", 0)) if "max_span_length_m" in nbi.columns and pd.notna(row.get("max_span_length_m")) else 0.0
+            skew_a = float(row.get("skew_angle", 0)) if "skew_angle" in nbi.columns and pd.notna(row.get("skew_angle")) else 0.0
+            year = int(row.get("year_built", 1970)) if pd.notna(row.get("year_built")) else 1970
+            rcv = estimate_replacement_cost_fhwa(deck_area, material, max_span, skew_a, year, cost_cfg)
+        else:
+            rcv = estimate_replacement_cost(material, deck_area, length)
+
+        nbi.loc[idx, "replacement_cost"] = rcv
+        loss = sum(
+            row.get(col, 0) * HAZUS_DAMAGE_RATIOS[ds] * rcv
+            for ds, col in zip(["none", "slight", "moderate", "extensive", "complete"], ds_cols)
+        )
+        nbi.loc[idx, "expected_loss"] = loss
+
+    total_rcv = nbi["replacement_cost"].sum()
+    total_loss = nbi["expected_loss"].sum()
+    print(f"\n  Total replacement cost: ${total_rcv:,.0f}")
+    print(f"  Total expected loss:    ${total_loss:,.0f} ({total_loss/total_rcv*100:.2f}% of RCV)")
+
     # Summary statistics
     print("\n  Expected damage distribution (bridge-count weighted):")
     for col, ds_name in zip(ds_cols, ["None", "Slight", "Moderate", "Extensive", "Complete"]):

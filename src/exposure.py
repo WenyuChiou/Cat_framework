@@ -74,6 +74,77 @@ def estimate_replacement_cost(
     return unit_cost * deck_area * length_factor
 
 
+# ── FHWA 2024 cost estimation ─────────────────────────────────────────
+
+def _lookup_factor(value: float, breaks: list[float], factors: list[float]) -> float:
+    """Piecewise constant lookup: return factors[i] where breaks[i-1] <= value < breaks[i]."""
+    if not breaks or value <= 0:
+        return factors[0] if factors else 1.0
+    for i, brk in enumerate(breaks):
+        if value < brk:
+            return factors[i]
+    return factors[-1]
+
+
+def estimate_replacement_cost_fhwa(
+    deck_area: float,
+    material: str = "other",
+    max_span_length: float = 0.0,
+    skew_angle: float = 0.0,
+    year_built: int = 1970,
+    cost_config=None,
+) -> float:
+    """
+    Estimate bridge RCV using FHWA 2024 state-level unit costs
+    with engineering adjustment factors.
+
+    RCV = deck_area * base_unit_cost * f_material * f_span * f_skew * f_seismic * f_region
+
+    Parameters
+    ----------
+    deck_area : float (m2)
+    material : str
+    max_span_length : float (m), 0 = unknown (factor=1.0)
+    skew_angle : float (degrees), 0 = no skew
+    year_built : int
+    cost_config : CostConfig, optional
+        If None, uses default CostConfig().
+
+    Returns
+    -------
+    float : Estimated replacement cost in USD.
+
+    References
+    ----------
+    Base rates: FHWA Bridge Replacement Unit Costs 2024
+        (fhwa.dot.gov/bridge/nbi/sd2024.cfm)
+    Material factors: Caltrans Comparative Bridge Costs 2022.
+    Span/skew adjustments: Mackie & Stojadinovic (2010), EE&SD 39(3).
+    """
+    from .config import CostConfig
+    if cost_config is None:
+        cost_config = CostConfig()
+
+    if deck_area <= 0:
+        return 0.0
+
+    base = cost_config.base_unit_cost
+    f_material = cost_config.material_factors.get(material, 1.0)
+    f_span = _lookup_factor(max_span_length, cost_config.span_breaks, cost_config.span_factors)
+    f_skew = _lookup_factor(skew_angle, cost_config.skew_breaks, cost_config.skew_factors)
+
+    if year_built < 1975:
+        f_seismic = cost_config.seismic_era_factors.get("pre_1975", 1.0)
+    elif year_built <= 1990:
+        f_seismic = cost_config.seismic_era_factors.get("1975_1990", 1.10)
+    else:
+        f_seismic = cost_config.seismic_era_factors.get("post_1990", 1.15)
+
+    f_region = cost_config.region_factor
+
+    return deck_area * base * f_material * f_span * f_skew * f_seismic * f_region
+
+
 # ── Synthetic portfolio ───────────────────────────────────────────────────
 
 # Realistic class distribution for Southern California (Northridge area)
@@ -172,6 +243,7 @@ def generate_synthetic_portfolio(
 def create_portfolio_from_nbi(
     nbi_df,
     default_vs30: float = 360.0,
+    cost_config=None,
 ) -> list[BridgeExposure]:
     """
     Convert a classified NBI DataFrame to a list of BridgeExposure objects.
@@ -184,8 +256,12 @@ def create_portfolio_from_nbi(
     nbi_df : pd.DataFrame
         Classified NBI data with columns: structure_number, latitude,
         longitude, hwb_class, material, structure_length_m, deck_width_m.
+        Optional: max_span_length_m, skew_angle, year_built.
     default_vs30 : float
         Default Vs30 when site data is unavailable.
+    cost_config : CostConfig, optional
+        If provided, uses FHWA 2024 multi-factor cost model.
+        If None, uses legacy material × deck_area model.
 
     Returns
     -------
@@ -203,7 +279,25 @@ def create_portfolio_from_nbi(
             width = 10.0
         deck_area = length * width
         material = row.get("material", "other")
-        cost = estimate_replacement_cost(material, deck_area, length)
+
+        # New NBI fields (safe defaults when absent or NaN)
+        max_span = row.get("max_span_length_m", 0.0)
+        if pd.isna(max_span):
+            max_span = 0.0
+        skew = row.get("skew_angle", 0.0)
+        if pd.isna(skew):
+            skew = 0.0
+        year = row.get("year_built", 1970)
+        if pd.isna(year):
+            year = 1970
+
+        if cost_config is not None:
+            cost = estimate_replacement_cost_fhwa(
+                deck_area, material, float(max_span),
+                float(skew), int(year), cost_config,
+            )
+        else:
+            cost = estimate_replacement_cost(material, deck_area, length)
 
         portfolio.append(BridgeExposure(
             bridge_id=str(row.get("structure_number", "")),
@@ -215,7 +309,7 @@ def create_portfolio_from_nbi(
             deck_area=float(deck_area),
             replacement_cost=cost,
             vs30=default_vs30,
-            skew_angle=0.0,
+            skew_angle=float(skew),
         ))
 
     return portfolio

@@ -111,13 +111,35 @@ interpolation:
 #     HWB5: 0.90
 #     HWB17: 1.10
 
-# ── 9. Analysis Settings ─────────────────────────────────────
+# ── 9. Replacement Cost Estimation ──────────────────────────────
+# FHWA 2024 bridge replacement unit costs with adjustment factors.
+# Source: fhwa.dot.gov/bridge/nbi/sd2024.cfm
+# Uncomment to activate FHWA multi-factor model (replaces legacy model).
+# cost:
+#   base_unit_cost: 5005.0          # CA NHS rate $/m2 (FHWA 2024)
+#   material_factors:
+#     concrete: 0.90
+#     steel: 1.15
+#     prestressed_concrete: 1.00
+#     wood: 0.65
+#     other: 0.95
+#   span_breaks: [30, 60, 120]      # max span length thresholds (m)
+#   span_factors: [1.0, 1.10, 1.25, 1.50]
+#   skew_breaks: [15, 30, 45]       # skew angle thresholds (degrees)
+#   skew_factors: [1.0, 1.05, 1.10, 1.20]
+#   seismic_era_factors:
+#     pre_1975: 1.00
+#     1975_1990: 1.10
+#     post_1990: 1.15
+#   region_factor: 1.0              # already state-specific, adjust if needed
+
+# ── 10. Analysis Settings ────────────────────────────────────
 analysis:
   n_realizations: 50
   n_events: 50
   seed: 42
 
-# ── 10. Validation ──────────────────────────────────────────────
+# ── 11. Validation ──────────────────────────────────────────────
 # Compare pipeline predictions against observed damage data.
 # 3-level validation framework:
 #   Level 1: GMPE component validation (station observations)

@@ -21,6 +21,36 @@ IM_COLUMN_MAP = {
     "SA30": "PSA30",   # Sa(3.0s)
 }
 
+# ── Cost configuration ────────────────────────────────────────────────
+
+@dataclass
+class CostConfig:
+    """Bridge replacement cost estimation parameters.
+
+    Base rates from FHWA Bridge Replacement Unit Costs 2024.
+    Material factors calibrated to Caltrans Comparative Bridge Costs 2022.
+    Reference: fhwa.dot.gov/bridge/nbi/sd2024.cfm
+    """
+    base_unit_cost: float = 5005.0  # CA NHS rate $/m² (FHWA 2024)
+    material_factors: dict[str, float] = field(default_factory=lambda: {
+        "concrete": 0.90,
+        "steel": 1.15,
+        "prestressed_concrete": 1.00,
+        "wood": 0.65,
+        "other": 0.95,
+    })
+    span_breaks: list[float] = field(default_factory=lambda: [30.0, 60.0, 120.0])
+    span_factors: list[float] = field(default_factory=lambda: [1.0, 1.10, 1.25, 1.50])
+    skew_breaks: list[float] = field(default_factory=lambda: [15.0, 30.0, 45.0])
+    skew_factors: list[float] = field(default_factory=lambda: [1.0, 1.05, 1.10, 1.20])
+    seismic_era_factors: dict[str, float] = field(default_factory=lambda: {
+        "pre_1975": 1.00,
+        "1975_1990": 1.10,
+        "post_1990": 1.15,
+    })
+    region_factor: float = 1.0
+
+
 # ── Configuration dataclass ──────────────────────────────────────────────
 
 @dataclass
@@ -54,6 +84,9 @@ class AnalysisConfig:
     # Calibration
     global_median_factor: float = 1.0
     class_factors: dict[str, float] = field(default_factory=dict)
+
+    # Cost estimation
+    cost: Optional[CostConfig] = None
 
     # Analysis settings
     n_realizations: int = 50
@@ -186,6 +219,29 @@ def load_config(path: str | Path = "config.yaml") -> AnalysisConfig:
     if isinstance(cal, dict):
         cfg.global_median_factor = cal.get("global_median_factor", 1.0)
         cfg.class_factors = cal.get("class_factors", {})
+
+    # Cost estimation (FHWA 2024)
+    cost_raw = raw.get("cost", None)
+    if cost_raw is not None:
+        cc = CostConfig()
+        if isinstance(cost_raw, dict):
+            if "base_unit_cost" in cost_raw:
+                cc.base_unit_cost = float(cost_raw["base_unit_cost"])
+            if "material_factors" in cost_raw:
+                cc.material_factors.update(cost_raw["material_factors"])
+            if "span_breaks" in cost_raw:
+                cc.span_breaks = [float(x) for x in cost_raw["span_breaks"]]
+            if "span_factors" in cost_raw:
+                cc.span_factors = [float(x) for x in cost_raw["span_factors"]]
+            if "skew_breaks" in cost_raw:
+                cc.skew_breaks = [float(x) for x in cost_raw["skew_breaks"]]
+            if "skew_factors" in cost_raw:
+                cc.skew_factors = [float(x) for x in cost_raw["skew_factors"]]
+            if "seismic_era_factors" in cost_raw:
+                cc.seismic_era_factors.update(cost_raw["seismic_era_factors"])
+            if "region_factor" in cost_raw:
+                cc.region_factor = float(cost_raw["region_factor"])
+        cfg.cost = cc
 
     # Analysis settings
     analysis = raw.get("analysis", {})

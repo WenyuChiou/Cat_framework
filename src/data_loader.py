@@ -308,6 +308,24 @@ def parse_nbi(
             df_raw[col_map["condition"]], errors="coerce"
         )
 
+    # Max span length (meters) — NBI Item 048
+    if col_map.get("max_span_length"):
+        df["max_span_length_m"] = pd.to_numeric(
+            df_raw[col_map["max_span_length"]], errors="coerce"
+        )
+
+    # Skew angle (degrees, 0-90) — NBI Item 034
+    if col_map.get("skew_angle"):
+        df["skew_angle"] = pd.to_numeric(
+            df_raw[col_map["skew_angle"]], errors="coerce"
+        ).clip(0, 90)
+
+    # Average Daily Traffic — NBI Item 029
+    if col_map.get("adt"):
+        df["adt"] = pd.to_numeric(
+            df_raw[col_map["adt"]], errors="coerce"
+        )
+
     # Filter to bounding box if provided; otherwise return all bridges
     if northridge_bbox is not None:
         mask = (
@@ -360,6 +378,15 @@ def _detect_nbi_columns(columns: list[str]) -> dict[str, str]:
             "deck cond", "superstructure cond", "substructure cond",
             "condition", "lowest rating",
         ],
+        "max_span_length": [
+            "max span len", "maximum span", "max span",
+        ],
+        "skew_angle": [
+            "degrees skew", "degree skew", "skew",
+        ],
+        "adt": [
+            "adt 029", "adt", "average daily traffic",
+        ],
     }
 
     for field, keywords in patterns.items():
@@ -395,6 +422,9 @@ def _fallback_nbi_column(field: str, columns: list[str]) -> str:
         "length": 48,
         "width": 51,
         "condition": 58,
+        "max_span_length": 54,
+        "skew_angle": 34,
+        "adt": 29,
     }
     idx = fallback_idx.get(field, 0)
     if idx < len(columns):
