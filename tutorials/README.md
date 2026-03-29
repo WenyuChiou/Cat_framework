@@ -18,12 +18,13 @@ pip install jupyterlab geopandas contextily
 | 03 | [Hazard: GMPE](03_hazard_gmpe.ipynb) | Hazard (Path B) | Compute Sa(1.0s) via BSSA21 GMPE with Vs30 enrichment, compare GMPE vs ShakeMap predictions |
 | 04 | [Fragility Curves](04_fragility.ipynb) | Vulnerability | Load fragility parameter database (CSV), NBI → HWB → parameter lookup workflow, plot fragility curves, heatmap of 28 HWB classes, portfolio damage distribution, MLE calibration (k=1.84, β=0.26) against Basoz 1998 |
 | 05 | [Validation](05_validation.ipynb) | Validation | L1: BSSA21 attenuation curve vs 185 seismic stations; L2: dual-pipeline (ShakeMap + GMPE) damage distribution vs Basoz 1998 observations |
+| 06 | [Loss & Cost](06_loss_and_cost.ipynb) | Loss | FHWA 2024 bridge replacement cost model, NBI adjustment factors, Hazus damage ratios, expected loss calculation |
 
 ## Pipeline Flow
 
 ```
 01 Config & Data ──> 02 ShakeMap ──┐
-                     03 GMPE    ──┤──> 04 Fragility ──> 05 Validation
+                     03 GMPE    ──┤──> 04 Fragility ──> 05 Validation ──> 06 Loss & Cost
                                   │
                           (two hazard paths converge)
 ```
