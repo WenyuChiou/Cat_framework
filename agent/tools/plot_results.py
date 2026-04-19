@@ -1,12 +1,5 @@
 """Tool: plot_results — generate visualization plots."""
 
-import sys
-from pathlib import Path
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
 from agent.config import OUTPUT_DIR, ensure_dirs
 from agent.tools.registry import register_tool
 
@@ -40,10 +33,11 @@ def _plot_damage_distribution(
     if sa_values is None:
         sa_values = [0.1, 0.3, 0.5, 0.8, 1.0]
 
+    ensure_dirs()
     output_dir = str(OUTPUT_DIR)
     filepath = plot_damage_distribution(
         hwb_class=hwb_class.upper(),
-        sample_intensities=sa_values,
+        im_values_sample=sa_values,
         output_dir=output_dir,
     )
     return f"Damage distribution for {hwb_class.upper()} at Sa={sa_values} saved to: {filepath}"
@@ -58,10 +52,11 @@ def _plot_class_comparison(
     import numpy as np
     from src.plotting import plot_comparison
 
+    ensure_dirs()
     output_dir = str(OUTPUT_DIR)
     classes = [c.upper() for c in hwb_classes]
     filepath = plot_comparison(
-        hwb_list=classes,
+        hwb_classes=classes,
         damage_state=damage_state,
         im_values=np.linspace(0, im_max, 200),
         output_dir=output_dir,

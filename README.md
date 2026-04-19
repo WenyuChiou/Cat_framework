@@ -54,6 +54,38 @@ See [`docs/`](docs/) for detailed dependency graphs and pipeline diagrams.
 pip install -r requirements.txt
 ```
 
+### 🤖 Conversational Agent (Streamlit Chat UI)
+
+An LLM-powered chat interface that wraps the framework APIs as 11 tools.
+Ask natural-language questions about earthquake bridge risk and get
+results, plots, interactive maps, and exportable Word reports inline.
+
+```bash
+# 1. Copy template and add an API key (NVIDIA free, OpenAI, Anthropic, or local Ollama)
+cp .env.example .env
+
+# 2. Launch the web app
+streamlit run app.py
+```
+
+**Supported LLM providers:**
+
+| Provider | Cost | Setup |
+|----------|------|-------|
+| **NVIDIA NIM** (recommended for demo) | Free | Get key at [build.nvidia.com](https://build.nvidia.com/) |
+| OpenAI | ~$0.01/query | `OPENAI_API_KEY` |
+| Anthropic | ~$0.01/query | `ANTHROPIC_API_KEY` |
+| Ollama (local) | Free | `ollama pull mistral-small:24b` |
+
+**Example queries:**
+- *"What are the fragility parameters for HWB5 at Sa=0.5g?"*
+- *"Run a M6.7 earthquake scenario at Northridge with uncertainty analysis"*
+- *"Show me a damage map for M6.7 Northridge with 100 bridges"*
+- *"Export a Word report for a M7.0 scenario near LA"*
+
+The agent auto-detects the framework layout — it works whether placed
+inside the framework directory or as a sibling.
+
 ### Run the Northridge Case Study
 
 ```bash

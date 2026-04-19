@@ -58,6 +58,11 @@ hooks/
 .claude/
 .ai/
 
+# Environment (API keys)
+.env
+.venv/
+venv/
+
 # IDE
 .vscode/
 .idea/

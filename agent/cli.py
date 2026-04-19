@@ -12,14 +12,6 @@ Environment variables:
     CAT411_ANTHROPIC_MODEL — Anthropic model (default: claude-sonnet-4-20250514)
 """
 
-import sys
-from pathlib import Path
-
-# Ensure project root is on path
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
 # Import tools to trigger registration (order doesn't matter)
 import agent.tools.query_bridges      # noqa: F401
 import agent.tools.get_fragility      # noqa: F401
@@ -27,15 +19,18 @@ import agent.tools.compute_loss       # noqa: F401
 import agent.tools.run_scenario       # noqa: F401
 import agent.tools.plot_results       # noqa: F401
 import agent.tools.summarize_portfolio  # noqa: F401
+import agent.tools.plot_map            # noqa: F401
+import agent.tools.run_scenario_uncertainty  # noqa: F401
+import agent.tools.export_report       # noqa: F401
 
 from agent.system_prompt import SYSTEM_PROMPT
 from agent.llm_client import chat, ToolCallEvent
-from agent.config import LLM_PROVIDER, OPENAI_MODEL, ANTHROPIC_MODEL, ensure_dirs
+from agent.config import LLM_PROVIDER, OPENAI_MODEL, ANTHROPIC_MODEL, OLLAMA_MODEL, ensure_dirs
 
 
 def _print_banner():
     """Print the agent welcome banner."""
-    model = ANTHROPIC_MODEL if LLM_PROVIDER == "anthropic" else OPENAI_MODEL
+    model = {"anthropic": ANTHROPIC_MODEL, "ollama": OLLAMA_MODEL}.get(LLM_PROVIDER, OPENAI_MODEL)
     print()
     print("=" * 62)
     print("  CAT411 Earthquake Risk Agent")
