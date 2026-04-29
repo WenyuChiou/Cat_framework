@@ -8,6 +8,89 @@ A modular catastrophe modeling pipeline for **earthquake-induced bridge damage a
 
 ---
 
+## Live Demo (Jupyter Notebooks)
+
+Five-minute setup on a fresh machine. The six notebooks under `tutorials/` cover the whole pipeline (config → hazard → fragility → validation → loss).
+
+### 1. Get the code
+
+Pick one:
+
+```bash
+# A. Git clone (recommended if the demo machine has git + internet)
+git clone https://github.com/WenyuChiou/Cat_framework.git
+cd Cat_framework
+
+# B. USB drive — copy CAT411_framework/ to the demo machine, then:
+cd path/to/CAT411_framework
+```
+
+### 2. Check Python and install
+
+```bash
+python --version                           # must be 3.10 or newer
+pip install -r requirements.txt
+pip install jupyterlab geopandas contextily
+```
+
+If Python is missing, install **3.11** from <https://www.python.org/downloads/> with **"Add Python to PATH"** checked.
+
+### 3. Launch JupyterLab
+
+```bash
+cd tutorials
+jupyter lab
+```
+
+The browser opens at `http://localhost:8888` with the file panel on the left.
+
+### 4. Notebooks to run on stage
+
+Each notebook is self-contained — `Run → Run All Cells`.
+
+| # | Notebook | What it shows | Time |
+|---|---|---|---|
+| 01 | `01_config_and_data.ipynb` | YAML config, NBI parsing, bridge map | 2 min |
+| 02 | `02_hazard_shakemap.ipynb` | ShakeMap → Sa(1.0 s) at each bridge | 1.5 min |
+| 04 | `04_fragility.ipynb` | Hazus fragility curves, HWB heatmap, MLE calibration | 2 min |
+| 06 | `06_loss_and_cost.ipynb` | FHWA 2024 cost model, expected loss, EP curve | 2 min |
+
+Demo flow: **01 → 02 → 04 → 06** (≈ 10 min). Notebooks 03 (GMPE) and 05 (validation) are kept for Q&A.
+
+### 5. The night before
+
+On your laptop, run the full sequence from a fresh clone, then `File → Save Notebook` for each. The saved output cells (figures, tables, prints) survive even if a cell errors on stage — you can read off the cached numbers.
+
+```bash
+git clone https://github.com/WenyuChiou/Cat_framework.git demo_dryrun
+cd demo_dryrun && pip install -r requirements.txt
+pip install jupyterlab geopandas contextily
+cd tutorials && jupyter lab
+```
+
+### 6. If something breaks on stage
+
+| Symptom | Fix |
+|---|---|
+| `pip install` blocked by firewall | Pre-build wheels: `pip download -r requirements.txt -d wheels && pip download jupyterlab geopandas contextily -d wheels`, copy `wheels/` to USB, install with `pip install --no-index --find-links wheels ...` |
+| `jupyter: command not found` | Run `python -m jupyterlab` instead |
+| Port 8888 in use | `jupyter lab --port 8889`, open the printed URL |
+| A cell errors live | Scroll past it — saved output from the dry run is still visible |
+| `geopandas` / `contextily` import error | Skip the basemap cell in notebook 01; the rest runs fine |
+| Browser does not open | Copy the URL printed by `jupyter lab` into the browser manually |
+
+### 7. Pre-flight checklist (5 min before you go on)
+
+- [ ] `python --version` returns 3.10 or newer
+- [ ] `cd CAT411_framework/tutorials && jupyter lab` opens the browser
+- [ ] Notebook 01 runs to the end of the first cell
+- [ ] Notebook 06 shows the loss number at the bottom
+- [ ] PowerPoint is on slide 1
+
+The 582 MB `data/vs30/global_vs30.grd` is **not** required by the tutorials — `data/vs30/california_vs30.npz` (4 MB) is the precomputed subset they actually load. Skip it when packing the USB.
+
+---
+
 ## Features
 
 - **Dual hazard paths** -- ShakeMap (historical) and GMPE forward prediction (BSSA14/21, 108 spectral periods)

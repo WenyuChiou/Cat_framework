@@ -2,6 +2,8 @@
 
 Step-by-step Jupyter notebooks covering each stage of the seismic bridge loss estimation pipeline, using the **1994 Northridge earthquake** as a case study.
 
+> **Demo day?** See the **Live Demo** section in [`../README.md`](../README.md) for the complete clone-to-run recipe (Python install, fallback steps, pre-flight checklist).
+
 ## Prerequisites
 
 ```bash
