@@ -5,22 +5,30 @@ __pycache__/
 .pytest_cache/
 
 # Generated outputs (re-created by running main.py)
-output/
+output/*
+# Exceptions: cached artifacts the tutorials load directly
+!output/exposure/
+output/exposure/*
+!output/exposure/nbi_all_bridges_rcv.xlsx
 
-# Vs30 data (large global grid, download via: python -m src.vs30_provider --download)
+# Vs30 data (large 582 MB global grid, download via: python -m src.vs30_provider --download)
 data/vs30/global_vs30.grd
+# Exception: 4 MB precomputed California subset used by tutorials
+!data/vs30/
+!data/vs30/california_vs30.npz
 
-# Data files (large, downloaded via --download-hazard)
-data/grid.xml
-data/stationlist.json
-data/CA24.txt
+# Large raw data files — included for tutorials so a fresh clone runs
+# (uncomment any line to re-exclude that file)
+# data/grid.xml
+# data/stationlist.json
+# data/CA24.txt
 data/plots/
 
 # GMPE validation data (large, used by scripts/run_gmpe_nga_west2.py)
 data/northridge_validation_full.xlsx
 
 # Real validation data (used by scripts/run_validation_real.py)
-data/northridge_observed.csv
+# data/northridge_observed.csv     # needed by tutorial 05
 data/real_observed.csv
 data/real_predicted.csv
 

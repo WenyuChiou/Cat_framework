@@ -136,6 +136,7 @@ The [`tutorials/`](tutorials/README.md) folder contains **6 self-contained Jupyt
 | # | Notebook | Stage | What it covers |
 |---|---|---|---|
 | 01 | [Config & Data](tutorials/01_config_and_data.ipynb) | Setup | YAML config, NBI parsing, HWB classification, bridge map |
+| 01b | [Config & Exposure Demo](tutorials/01b_config_and_exposure_demo.ipynb) | Setup (visual) | Reproduce the slide-deck Configuration / Exposure showcase figures |
 | 02 | [Hazard: ShakeMap](tutorials/02_hazard_shakemap.ipynb) | Hazard A | Sa interpolation to bridge sites, 5 spatial methods |
 | 03 | [Hazard: GMPE](tutorials/03_hazard_gmpe.ipynb) | Hazard B | BSSA21 forward prediction with Vs30 enrichment |
 | 04 | [Fragility](tutorials/04_fragility.ipynb) | Vulnerability | Hazus curves, 28-class heatmap, MLE calibration |

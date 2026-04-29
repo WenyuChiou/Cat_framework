@@ -16,6 +16,7 @@ pip install jupyterlab geopandas contextily
 | # | Notebook | Pipeline Stage | Description |
 |---|----------|---------------|-------------|
 | 01 | [Config & Data Loading](01_config_and_data.ipynb) | Setup | Load `config.yaml`, parse ShakeMap grid and NBI inventory, classify bridges to HWB classes, bridge location map with basemap |
+| 01b | [Config & Exposure Demo Figures](01b_config_and_exposure_demo.ipynb) | Setup (visual) | Reproduces the slide-deck figures: four-config slicing comparison + exposure-database overview (spatial map / RCV intensity / year-built / NEHRP class) |
 | 02 | [Hazard: ShakeMap](02_hazard_shakemap.ipynb) | Hazard (Path A) | Interpolate Sa(1.0s) to bridge sites via nearest-neighbor and kriging, spatial IM map with OpenStreetMap basemap |
 | 03 | [Hazard: GMPE](03_hazard_gmpe.ipynb) | Hazard (Path B) | Compute Sa(1.0s) via BSSA21 GMPE with Vs30 enrichment, compare GMPE vs ShakeMap predictions |
 | 04 | [Fragility Curves](04_fragility.ipynb) | Vulnerability | Load fragility parameter database (CSV), NBI → HWB → parameter lookup workflow, plot fragility curves, heatmap of 28 HWB classes, portfolio damage distribution, MLE calibration (k=1.84, β=0.26) against Basoz 1998 |
