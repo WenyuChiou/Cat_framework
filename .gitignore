@@ -10,6 +10,9 @@ output/*
 !output/exposure/
 output/exposure/*
 !output/exposure/nbi_all_bridges_rcv.xlsx
+!output/gmpe_nga_west2/
+output/gmpe_nga_west2/*
+!output/gmpe_nga_west2/grid_gmpe_pga_sa1s.xlsx
 
 # Vs30 data (large 582 MB global grid, download via: python -m src.vs30_provider --download)
 data/vs30/global_vs30.grd
