@@ -4,6 +4,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Methodology: FEMA Hazus 6.1](https://img.shields.io/badge/Methodology-Hazus%206.1-orange.svg)](https://www.fema.gov/hazus)
 
+> 📌 **Course project / supporting infrastructure** — built to support
+> the broader human-flood modeling research arc.  Main work:
+> [WAGF](https://github.com/WenyuChiou/WAGF) (LLM agent safety) ·
+> [FLOODABM](https://github.com/WenyuChiou/FLOODABM) (household flood adaptation ABM) ·
+> [awesome-agentic-ai-zh](https://github.com/WenyuChiou/awesome-agentic-ai-zh) (community curriculum).
+
 A modular catastrophe modeling pipeline for **earthquake-induced bridge damage and loss estimation**, implementing the FEMA Hazus 6.1 methodology. Built for the CAT411 course at National Central University.
 
 ## What's in this repo
